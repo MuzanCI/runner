@@ -1,8 +1,9 @@
-use futures::future::BoxFuture;
 use http::Request;
 use muzanci_transport::MUZANCI_TRANSPORT_V1;
 use muzanci_transport::MUZANCI_WORKER_ID_HEADER;
-use muzanci_transport::channel::FnOpenChannelRequestHandler;
+use muzanci_transport::channel::ChannelHandle;
+use muzanci_transport::channel::ChannelType;
+use muzanci_transport::channel::FnChannelAcceptor;
 use muzanci_transport::channel::accept;
 use muzanci_transport::mux::Mux;
 use muzanci_transport::mux::MuxHandle;
@@ -61,15 +62,28 @@ pub async fn connect(hostname: &str) -> anyhow::Result<(WorkerId, MuxHandle)> {
     let server_stream = hyper::upgrade::on(response).await?;
     let server_stream = hyper_util::rt::TokioIo::new(server_stream);
 
-    let open_handler = FnOpenChannelRequestHandler::new(move |channel_id| {
-        eprintln!("Received request to open channel [{}]", channel_id);
-        // TODO: Decide whether the channel can be opened.
+    let channel_acceptor = FnChannelAcceptor::new(move |channel_id, channel_type| {
+        eprintln!(
+            "Received request to open channel [{}] of type {:?}",
+            channel_id, channel_type
+        );
+
+        // Worker only accepts tunnel channels for now.
+        match channel_type {
+            ChannelType::Tunnel => {
+                eprintln!("Accepting tunnel channel [{}]", channel_id);
+            }
+            _ => {
+                return Err(format!("Channel type {:?} not supported", channel_type));
+            }
+        };
+
         Ok(accept(move |channel_handle| async move {
             eprintln!("Accepted channel [{}]", channel_id);
-            // TODO: Spawn a task to handle the channel.
+            // TODO: The task that will be spawned to handle the channel.
         }))
     });
-    let mux_handle = Mux::spawn(server_stream, open_handler);
+    let mux_handle = Mux::spawn(server_stream, channel_acceptor);
 
     Ok((worker_id, mux_handle))
 }
