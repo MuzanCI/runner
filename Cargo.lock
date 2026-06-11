@@ -64,7 +64,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "muzan-runner"
+name = "muzan-worker"
 version = "0.1.0"
 dependencies = [
  "hyper",
