@@ -81,8 +81,10 @@ impl Worker {
             .await
             .unwrap();
 
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
         self.channel_handle
-            .send(Message::WorkerEvent(WorkerEvent::Exited))
+            .send(Message::WorkerEvent(WorkerEvent::Completed))
             .await
             .unwrap();
 
