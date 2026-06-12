@@ -59,11 +59,11 @@ impl Scheduler {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             // TODO: Replace with capacity_freed signal.
 
-            if self
+            let runner_capacity = self
                 .runner_capacity
-                .load(std::sync::atomic::Ordering::SeqCst)
-                == 0
-            {
+                .load(std::sync::atomic::Ordering::SeqCst);
+            eprintln!("Runner capacity: {}", runner_capacity);
+            if runner_capacity == 0 {
                 eprintln!("Runner has no capacity. Skipping job query.");
                 continue;
             }

@@ -3,7 +3,7 @@ use std::sync::{Arc, atomic::AtomicU64};
 use muzanci_transport::{
     channel::{ChannelHandle, Message},
     job::JobId,
-    worker::{WorkerEvent, WorkerId},
+    worker::{WorkerConfig, WorkerEvent, WorkerId},
 };
 
 pub struct WorkerHandle {}
@@ -50,11 +50,33 @@ impl Worker {
             }
         };
 
-        self.worker_capacity.fetch_sub(
-            worker_config.worker_capacity(),
-            std::sync::atomic::Ordering::SeqCst,
-        );
+        let worker_capacity = worker_config.worker_capacity();
+        let mut message_rx = self.channel_handle.take_message_rx();
 
+        tokio::select! {
+            maybe_message = message_rx.recv() => {
+                match maybe_message {
+                    Some(Message::WorkerTimedOut) => {
+                        println!("Worker server timed out!");
+                    }
+                    Some(message) => {
+                        println!("Worker server received unexpected message: {:?}", message);
+                    }
+                    None => {
+                        eprintln!("Worker server channel closed by peer");
+                    }
+                }
+             }
+            _ = self.execute(worker_config) => {
+                println!("Worker execution completed");
+             }
+        }
+
+        self.worker_capacity
+            .fetch_add(worker_capacity, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    async fn execute(&self, worker_config: WorkerConfig) {
         // TODO: Use trait object for async process execution.
         tokio::process::Command::new("echo")
             .arg("Creating ZFS dataset...")
