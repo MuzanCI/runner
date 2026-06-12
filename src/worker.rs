@@ -1,10 +1,13 @@
 use std::sync::{Arc, atomic::AtomicU64};
 
-use muzanci_transport::channel::{ChannelHandle, Message, RunnerEvent};
+use muzanci_transport::{
+    channel::{ChannelHandle, Message, WorkerEvent},
+    worker::WorkerId,
+};
 
-pub struct RunnerHandle {}
+pub struct WorkerHandle {}
 
-pub struct Runner {
+pub struct Worker {
     /// A channel for communicating with the server.
     channel_handle: ChannelHandle,
 
@@ -12,44 +15,44 @@ pub struct Runner {
     worker_capacity: Arc<AtomicU64>,
 }
 
-impl Runner {
-    /// Spawns a new [`Runner`] task and returns a [`RunnerHandle`].
+impl Worker {
+    /// Spawns a new [`Worker`] task and returns a [`WorkerHandle`].
     pub fn spawn(
-        worker_id: u64,
+        worker_id: WorkerId,
         channel_handle: ChannelHandle,
         worker_capacity: Arc<AtomicU64>,
-    ) -> RunnerHandle {
-        let runner = Runner {
+    ) -> WorkerHandle {
+        let worker = Worker {
             channel_handle,
             worker_capacity,
         };
-        tokio::spawn(runner.run(worker_id));
-        RunnerHandle {}
+        tokio::spawn(worker.run(worker_id));
+        WorkerHandle {}
     }
 
-    async fn run(mut self, worker_id: u64) {
+    async fn run(mut self, worker_id: WorkerId) {
         self.channel_handle
-            .send(Message::InitializeRunnerRequest {
+            .send(Message::InitializeWorkerRequest {
                 worker_id: worker_id,
             })
             .await
             .unwrap();
 
-        let runner_config = match self.channel_handle.recv().await.unwrap() {
-            Message::InitializeRunnerResponse(Ok(runner_config)) => {
-                println!("Received runner config: {:?}", runner_config);
-                runner_config
+        let worker_config = match self.channel_handle.recv().await.unwrap() {
+            Message::InitializeWorkerResponse(Ok(worker_config)) => {
+                println!("Received worker config: {:?}", worker_config);
+                worker_config
             }
-            Message::InitializeRunnerResponse(Err(err)) => {
-                panic!("Failed to initialize runner: {}", err);
+            Message::InitializeWorkerResponse(Err(err)) => {
+                panic!("Failed to initialize worker: {}", err);
             }
             msg => {
-                panic!("Expected InitializeRunnerResponse. Got {:?}", msg);
+                panic!("Expected InitializeWorkerResponse. Got {:?}", msg);
             }
         };
 
         self.worker_capacity.fetch_sub(
-            runner_config.worker_capacity(),
+            worker_config.worker_capacity(),
             std::sync::atomic::Ordering::SeqCst,
         );
 
@@ -67,25 +70,20 @@ impl Runner {
         tokio::process::Command::new("echo")
             .arg(format!(
                 "Cloning repo {}/{} at commit {}...",
-                runner_config.repo_owner(),
-                runner_config.repo_name(),
-                runner_config.commit_sha()
+                worker_config.repo_owner(),
+                worker_config.repo_name(),
+                worker_config.commit_sha()
             ))
             .spawn()
             .unwrap();
 
         self.channel_handle
-            .send(Message::RunnerEvent(RunnerEvent::Started {
-                runner_id: runner_config.runner_id(),
-            }))
+            .send(Message::WorkerEvent(WorkerEvent::Started))
             .await
             .unwrap();
 
         self.channel_handle
-            .send(Message::RunnerEvent(RunnerEvent::Exited {
-                runner_id: runner_config.runner_id(),
-                exit_code: 0,
-            }))
+            .send(Message::WorkerEvent(WorkerEvent::Exited))
             .await
             .unwrap();
 

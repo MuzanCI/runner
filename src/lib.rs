@@ -1,19 +1,17 @@
 use http::Request;
+use muzanci_transport::MUZANCI_RUNNER_ID_HEADER;
 use muzanci_transport::MUZANCI_TRANSPORT_V1;
-use muzanci_transport::MUZANCI_WORKER_ID_HEADER;
-use muzanci_transport::channel::ChannelHandle;
 use muzanci_transport::channel::ChannelType;
 use muzanci_transport::channel::FnChannelAcceptor;
 use muzanci_transport::channel::accept;
 use muzanci_transport::mux::Mux;
 use muzanci_transport::mux::MuxHandle;
+use muzanci_transport::runner::RunnerId;
 
-pub mod runner;
 pub mod scheduler;
+pub mod worker;
 
-type WorkerId = u64;
-
-pub async fn connect(hostname: &str) -> anyhow::Result<(WorkerId, MuxHandle)> {
+pub async fn connect(hostname: &str) -> anyhow::Result<(RunnerId, MuxHandle)> {
     let server_stream = {
         let stream = tokio::net::TcpStream::connect(hostname).await?;
         stream.set_nodelay(true)?;
@@ -31,7 +29,7 @@ pub async fn connect(hostname: &str) -> anyhow::Result<(WorkerId, MuxHandle)> {
 
     let request = Request::builder()
         .method("POST")
-        .uri("/worker/register")
+        .uri("/runner/register")
         .header(http::header::HOST, hostname)
         .header(http::header::CONNECTION, "Upgrade")
         .header(http::header::UPGRADE, MUZANCI_TRANSPORT_V1)
@@ -47,15 +45,15 @@ pub async fn connect(hostname: &str) -> anyhow::Result<(WorkerId, MuxHandle)> {
         ));
     }
 
-    let worker_id = response
+    let runner_id = response
         .headers()
-        .get(MUZANCI_WORKER_ID_HEADER)
+        .get(MUZANCI_RUNNER_ID_HEADER)
         .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse::<WorkerId>().ok())
+        .and_then(|s| s.parse::<RunnerId>().ok())
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "Missing or invalid {} header in response",
-                MUZANCI_WORKER_ID_HEADER
+                MUZANCI_RUNNER_ID_HEADER
             )
         })?;
 
@@ -68,7 +66,7 @@ pub async fn connect(hostname: &str) -> anyhow::Result<(WorkerId, MuxHandle)> {
             channel_id, channel_type
         );
 
-        // Worker only accepts tunnel channels for now.
+        // Runner only accepts tunnel channels for now.
         match channel_type {
             ChannelType::Tunnel => {
                 eprintln!("Accepting tunnel channel [{}]", channel_id);
@@ -81,9 +79,41 @@ pub async fn connect(hostname: &str) -> anyhow::Result<(WorkerId, MuxHandle)> {
         Ok(accept(move |channel_handle| async move {
             eprintln!("Accepted channel [{}]", channel_id);
             // TODO: The task that will be spawned to handle the channel.
+            let mut tunnel_server = TunnelServer::new(channel_handle);
+            tunnel_server.run().await;
         }))
     });
     let mux_handle = Mux::spawn(server_stream, channel_acceptor);
 
-    Ok((worker_id, mux_handle))
+    Ok((runner_id, mux_handle))
+}
+
+struct TunnelServer {
+    channel_handle: muzanci_transport::channel::ChannelHandle,
+}
+
+impl TunnelServer {
+    pub fn new(channel_handle: muzanci_transport::channel::ChannelHandle) -> Self {
+        Self { channel_handle }
+    }
+
+    pub async fn run(&mut self) {
+        loop {
+            match self.channel_handle.recv().await {
+                Some(message) => {
+                    println!("Tunnel server received message: {:?}", message);
+                    self.handle_message(message).await;
+                }
+                None => {
+                    eprintln!("Tunnel server channel closed");
+                    break;
+                }
+            }
+        }
+    }
+
+    pub async fn handle_message(&mut self, message: muzanci_transport::channel::Message) {
+        println!("Tunnel server handling message: {:?}", message);
+        unimplemented!("Tunnel server message handling not implemented yet");
+    }
 }
