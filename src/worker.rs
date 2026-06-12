@@ -1,8 +1,9 @@
 use std::sync::{Arc, atomic::AtomicU64};
 
 use muzanci_transport::{
-    channel::{ChannelHandle, Message, WorkerEvent},
-    worker::WorkerId,
+    channel::{ChannelHandle, Message},
+    job::JobId,
+    worker::{WorkerEvent, WorkerId},
 };
 
 pub struct WorkerHandle {}
@@ -32,22 +33,20 @@ impl Worker {
 
     async fn run(mut self, worker_id: WorkerId) {
         self.channel_handle
-            .send(Message::InitializeWorkerRequest {
-                worker_id: worker_id,
-            })
+            .send(Message::WorkerConfigRequest { worker_id })
             .await
             .unwrap();
 
         let worker_config = match self.channel_handle.recv().await.unwrap() {
-            Message::InitializeWorkerResponse(Ok(worker_config)) => {
+            Message::WorkerConfigResponse(Ok(worker_config)) => {
                 println!("Received worker config: {:?}", worker_config);
                 worker_config
             }
-            Message::InitializeWorkerResponse(Err(err)) => {
+            Message::WorkerConfigResponse(Err(err)) => {
                 panic!("Failed to initialize worker: {}", err);
             }
             msg => {
-                panic!("Expected InitializeWorkerResponse. Got {:?}", msg);
+                panic!("Expected WorkerConfigResponse. Got {:?}", msg);
             }
         };
 

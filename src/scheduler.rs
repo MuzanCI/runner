@@ -132,7 +132,7 @@ impl Scheduler {
                 };
 
                 match result {
-                    Ok(()) => {
+                    Ok(worker_id) => {
                         eprintln!("Successfully acquired job: {:?}", job_id);
                         self.runner_capacity.fetch_sub(
                             available_job.runner_capacity_required(),
@@ -147,7 +147,7 @@ impl Scheduler {
                         };
 
                         Worker::spawn(
-                            self.runner_id,
+                            worker_id,
                             worker_channel_handle,
                             self.runner_capacity.clone(),
                         );
