@@ -62,7 +62,6 @@ impl Scheduler {
             let runner_capacity = self
                 .runner_capacity
                 .load(std::sync::atomic::Ordering::SeqCst);
-            eprintln!("Runner capacity: {}", runner_capacity);
             if runner_capacity == 0 {
                 eprintln!("Runner has no capacity. Skipping job query.");
                 continue;
@@ -73,13 +72,7 @@ impl Scheduler {
                 .await
                 .unwrap();
             let available_jobs = match self.channel_handle.recv().await {
-                Some(Message::QueryAvailableJobsResponse { available_jobs }) => {
-                    eprintln!(
-                        "Received QueryAvailableJobsResponse with {} jobs",
-                        available_jobs.len()
-                    );
-                    available_jobs
-                }
+                Some(Message::QueryAvailableJobsResponse { available_jobs }) => available_jobs,
                 Some(message) => {
                     eprintln!(
                         "Expected QueryAvailableJobsResponse message. Got: {:?}",
