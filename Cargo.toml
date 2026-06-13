@@ -23,3 +23,7 @@ http-body-util = "0.1.3"
 bytes = "1.11.1"
 futures = "0.3.32"
 uuid = { version = "1.23.3", features = ["v7"] }
+russh = "0.61.2"
+russh-keys = "0.49.2"
+nix = { version = "0.31.3", features = ["term"] }
+rand = "0.10.1"

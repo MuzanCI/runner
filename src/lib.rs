@@ -81,11 +81,11 @@ pub async fn connect(hostname: &str) -> anyhow::Result<(RunnerId, MuxHandle)> {
 
         Ok(accept(move |channel_handle| async move {
             eprintln!("Accepted channel [{}]", channel_id);
-            // TODO: The task that will be spawned to handle the channel.
-            let mut tunnel_server = TunnelServer::new(channel_handle);
+            let tunnel_server = TunnelServer::new(channel_handle);
             tunnel_server.run().await;
         }))
     });
+
     let mux_handle = Mux::spawn(server_stream, channel_acceptor);
 
     Ok((runner_id, mux_handle))
