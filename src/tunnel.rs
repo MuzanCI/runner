@@ -102,31 +102,10 @@ pub struct SshHandler {
 impl russh::server::Handler for SshHandler {
     type Error = anyhow::Error;
 
-    async fn auth_publickey(
-        &mut self,
-        user: &str,
-        public_key: &russh::keys::PublicKey,
-    ) -> Result<russh::server::Auth, Self::Error> {
-        println!(
-            "SSH auth attempt for user '{}' with public key: {:?}",
-            user, public_key
-        );
+    /// SSH clients are tunneled through the MuzanCI server, which already performs authentication.
+    /// Therefore, the worker SSH server accepts all authentication attempts without checking credentials.
+    async fn auth_none(&mut self, _user: &str) -> Result<russh::server::Auth, Self::Error> {
         Ok(russh::server::Auth::Accept)
-        // if self.config.authorized_keys.iter().any(|k| k == public_key) {
-        //     println!("SSH auth successful for user '{}'", user);
-        //     Ok(russh::server::Auth::Accept)
-        // } else {
-        //     println!("SSH auth failed for user '{}'", user);
-        //     Ok(russh::server::Auth::reject())
-        // }
-    }
-
-    async fn auth_password(
-        &mut self,
-        _user: &str,
-        _password: &str,
-    ) -> Result<russh::server::Auth, Self::Error> {
-        Ok(russh::server::Auth::reject())
     }
 
     async fn channel_open_session(
