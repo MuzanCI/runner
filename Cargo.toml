@@ -27,3 +27,12 @@ russh = "0.61.2"
 russh-keys = "0.49.2"
 nix = { version = "0.31.3", features = ["term"] }
 rand = "0.10.1"
+tempfile = "3.24.0"
+
+[lib]
+name = "muzanci_runner"
+path = "src/lib.rs"
+
+[[bin]]
+name = "runner"
+path = "src/main.rs"
