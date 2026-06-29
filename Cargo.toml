@@ -15,6 +15,7 @@ tokio = { version = "1.52.3", features = [
     "process",
 ] }
 muzanci-transport = { path = "../muzanci-transport" }
+muzanci-interpreter = { path = "../muzanci-interpreter" }
 rustls = "0.23.40"
 tokio-rustls = "0.26.4"
 anyhow = "1.0.102"
@@ -29,6 +30,12 @@ nix = { version = "0.31.3", features = ["term"] }
 rand = "0.10.1"
 tempfile = "3.24.0"
 tokio-util = "0.7.18"
+thiserror = "2.0.18"
+async-trait = "0.1.89"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-appender = "0.2.5"
+tracing-error = "0.2.1"
 
 [lib]
 name = "muzanci_runner"

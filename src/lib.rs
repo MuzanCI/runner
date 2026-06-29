@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use http::Request;
 
@@ -11,10 +10,14 @@ use muzanci_transport::mux::Mux;
 use muzanci_transport::mux::MuxHandle;
 use tokio_util::sync::CancellationToken;
 
-pub mod debugger_scheduler;
+use crate::capacity::SharedEvaluationCapacity;
+use crate::jail::Jailer;
+
+pub mod capacity;
 pub mod evaluator;
-pub mod evaluator_scheduler;
-pub mod worker_scheduler;
+pub mod jail;
+pub mod logging;
+pub mod scheduler;
 
 #[derive(Clone)]
 pub struct RunnerState {
@@ -22,6 +25,7 @@ pub struct RunnerState {
     runner_id: RunnerId,
     mux_handle: MuxHandle,
     evaluation_capacity: SharedEvaluationCapacity,
+    jailer: Arc<dyn Jailer>,
 }
 
 impl RunnerState {
@@ -30,18 +34,15 @@ impl RunnerState {
         runner_id: RunnerId,
         mux_handle: MuxHandle,
         evaluation_capacity: SharedEvaluationCapacity,
+        jailer: Arc<dyn Jailer>,
     ) -> Self {
         Self {
             cancellation_token,
             runner_id,
             mux_handle,
             evaluation_capacity,
+            jailer,
         }
-    }
-
-    pub fn has_evaluation_capacity(&self) -> bool {
-        let capacity = self.evaluation_capacity.capacity.lock().unwrap();
-        *capacity > 0
     }
 }
 
@@ -104,65 +105,4 @@ pub async fn connect(hostname: &str) -> anyhow::Result<(RunnerId, MuxHandle)> {
     let mux_handle = Mux::spawn(server_stream, channel_acceptor);
 
     Ok((runner_id, mux_handle))
-}
-
-pub type EvaluationCapacity = u64;
-
-#[derive(Clone)]
-pub struct SharedEvaluationCapacity {
-    capacity: Arc<Mutex<EvaluationCapacity>>,
-}
-
-pub struct EvaluationCapacityPermit {
-    shared: SharedEvaluationCapacity,
-    amount: EvaluationCapacity,
-    committed: bool,
-}
-
-impl SharedEvaluationCapacity {
-    pub fn new(initial_capacity: EvaluationCapacity) -> Self {
-        Self {
-            capacity: Arc::new(Mutex::new(initial_capacity)),
-        }
-    }
-
-    /// Reserves evaluation capacity. To commit the capacity reservation, call [`EvaluationCapacityPermit::commit`].
-    pub async fn reserve(
-        &self,
-        amount: EvaluationCapacity,
-    ) -> anyhow::Result<EvaluationCapacityPermit> {
-        let mut capacity = self.capacity.lock().unwrap();
-        if *capacity < amount {
-            return Err(anyhow::anyhow!("Not enough evaluation capacity available"));
-        }
-        *capacity -= amount;
-        Ok(EvaluationCapacityPermit {
-            shared: self.clone(),
-            amount,
-            committed: false,
-        })
-    }
-
-    /// Restores evaluation capacity.
-    pub fn restore(&self, amount: EvaluationCapacity) {
-        let mut capacity = self.capacity.lock().unwrap();
-        *capacity += amount;
-    }
-}
-
-impl EvaluationCapacityPermit {
-    /// Consumes the permit and commits the capacity reduction.
-    pub fn commit(mut self) {
-        self.committed = true;
-    }
-}
-
-impl Drop for EvaluationCapacityPermit {
-    /// If permit is not committed when dropped, then restore the reserved capacity.
-    fn drop(&mut self) {
-        if !self.committed {
-            let mut capacity = self.shared.capacity.lock().unwrap();
-            *capacity += self.amount;
-        }
-    }
 }
