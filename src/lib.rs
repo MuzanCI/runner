@@ -10,6 +10,7 @@ use muzanci_transport::mux::Mux;
 use muzanci_transport::mux::MuxHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::capacity::SharedAssignmentCapacity;
 use crate::capacity::SharedEvaluationCapacity;
 use crate::jail::Jailer;
 
@@ -25,6 +26,7 @@ pub struct RunnerState {
     runner_id: RunnerId,
     mux_handle: MuxHandle,
     evaluation_capacity: SharedEvaluationCapacity,
+    assignment_capacity: SharedAssignmentCapacity,
     jailer: Arc<dyn Jailer>,
 }
 
@@ -34,6 +36,7 @@ impl RunnerState {
         runner_id: RunnerId,
         mux_handle: MuxHandle,
         evaluation_capacity: SharedEvaluationCapacity,
+        assignment_capacity: SharedAssignmentCapacity,
         jailer: Arc<dyn Jailer>,
     ) -> Self {
         Self {
@@ -41,6 +44,7 @@ impl RunnerState {
             runner_id,
             mux_handle,
             evaluation_capacity,
+            assignment_capacity,
             jailer,
         }
     }

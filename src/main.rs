@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use muzanci_runner::{
-    RunnerState, capacity::SharedEvaluationCapacity, jail::FakeJailer,
-    scheduler::EvaluatorScheduler,
+    RunnerState,
+    capacity::{SharedAssignmentCapacity, SharedEvaluationCapacity},
+    jail::FakeJailer,
+    scheduler::{EvaluatorScheduler, WorkerScheduler},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -16,6 +18,7 @@ async fn main() {
     tracing::info!("Assigned runner ID [{}]", runner_id);
 
     let evaluation_capacity = SharedEvaluationCapacity::new(10);
+    let assignment_capacity = SharedAssignmentCapacity::new(10);
 
     let jailer = Arc::new(FakeJailer);
 
@@ -24,17 +27,18 @@ async fn main() {
         runner_id,
         mux_handle,
         evaluation_capacity,
+        assignment_capacity,
         jailer,
     ));
 
     let evaluator_scheduler_handle = EvaluatorScheduler::spawn(runner_state.clone());
-    // let worker_scheduler_handle = WorkerScheduler::spawn(runner_state.clone());
+    let worker_scheduler_handle = WorkerScheduler::spawn(runner_state.clone());
     // let debugger_scheduler_handle = DebuggerScheduler::spawn(runner_state.clone());
 
     // TODO: Add cancellation token for graceful shutdown.
     let _ = tokio::join!(
         evaluator_scheduler_handle,
-        // worker_scheduler_handle,
+        worker_scheduler_handle,
         // debugger_scheduler_handle
     );
 }
