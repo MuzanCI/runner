@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, EvaluatorSchedulerMessage, Message, TriggerId,
-    WaitingTask, WaitingTrigger, WorkerSchedulerMessage,
+    ChannelReceiver, ChannelSender, ChannelType, EvaluatorSchedulerMessage, Message, WaitingTask,
+    WaitingTrigger, WorkerSchedulerMessage,
 };
 
-use crate::RunnerState;
+use crate::{RunnerState, evaluator::Evaluator, worker::Worker};
 
 pub struct EvaluatorSchedulerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -155,6 +155,7 @@ impl EvaluatorScheduler {
                     trigger,
                     evaluation_id
                 );
+                Evaluator::spawn(self.runner_state.clone(), evaluation_id);
                 permit.commit();
                 Ok(())
             }
@@ -309,12 +310,13 @@ impl WorkerScheduler {
             });
 
         match result {
-            Ok(evaluation_id) => {
+            Ok(assignment_id) => {
                 tracing::info!(
-                    "Successfully reserved task {:?} with evaluation ID {:?}",
+                    "Successfully reserved task {:?} with assignment ID {:?}",
                     task,
-                    evaluation_id
+                    assignment_id
                 );
+                Worker::spawn(self.runner_state.clone(), assignment_id);
                 permit.commit();
                 Ok(())
             }
@@ -326,61 +328,3 @@ impl WorkerScheduler {
         }
     }
 }
-
-// pub struct WorkerSchedulerHandle {
-//     handle: tokio::task::JoinHandle<()>,
-// }
-
-// impl Future for WorkerSchedulerHandle {
-//     type Output = Result<(), tokio::task::JoinError>;
-
-//     fn poll(
-//         mut self: std::pin::Pin<&mut Self>,
-//         cx: &mut std::task::Context<'_>,
-//     ) -> std::task::Poll<Self::Output> {
-//         // Since JoinHandle is Unpin, we can pin a mutable reference to it directly
-//         std::pin::Pin::new(&mut self.handle).poll(cx)
-//     }
-// }
-
-// pub struct WorkerScheduler;
-
-// impl WorkerScheduler {
-//     pub fn spawn(mux_handle: Arc<MuxHandle>) -> WorkerSchedulerHandle {
-//         let handle = tokio::spawn(WorkerScheduler.run());
-//         WorkerSchedulerHandle { handle }
-//     }
-
-//     pub async fn run(self) {
-//         unimplemented!("Implement the worker scheduler logic here.");
-//     }
-// }
-
-// pub struct DebuggerSchedulerHandle {
-//     handle: tokio::task::JoinHandle<()>,
-// }
-
-// impl Future for DebuggerSchedulerHandle {
-//     type Output = Result<(), tokio::task::JoinError>;
-
-//     fn poll(
-//         mut self: std::pin::Pin<&mut Self>,
-//         cx: &mut std::task::Context<'_>,
-//     ) -> std::task::Poll<Self::Output> {
-//         // Since JoinHandle is Unpin, we can pin a mutable reference to it directly
-//         std::pin::Pin::new(&mut self.handle).poll(cx)
-//     }
-// }
-
-// pub struct DebuggerScheduler;
-
-// impl DebuggerScheduler {
-//     pub fn spawn(mux_handle: Arc<MuxHandle>) -> DebuggerSchedulerHandle {
-//         let handle = tokio::spawn(DebuggerScheduler.run());
-//         DebuggerSchedulerHandle { handle }
-//     }
-
-//     pub async fn run(self) {
-//         unimplemented!("Implement the debugger scheduler logic here.");
-//     }
-// }

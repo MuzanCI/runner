@@ -17,6 +17,8 @@ where
 {
     fn spawn(&self, cmd_str: &str) -> anyhow::Result<Child>;
     fn read_file(&self, path: &Path) -> anyhow::Result<String>;
+    fn add_secret(&self, name: &str, value: &str) -> anyhow::Result<()>;
+    fn clear_secrets(&self) -> anyhow::Result<()>;
 }
 
 pub struct FakeJailer;
@@ -37,10 +39,19 @@ pub struct JailCommand {
 
 impl Jail for FakeJail {
     fn spawn(&self, cmd_str: &str) -> anyhow::Result<Child> {
+        // Create tmp directory.
         Ok(Command::new("sh").arg("-c").arg(cmd_str).spawn()?)
     }
 
     fn read_file(&self, path: &Path) -> anyhow::Result<String> {
         Ok(std::fs::read_to_string(path)?)
+    }
+
+    fn add_secret(&self, name: &str, value: &str) -> anyhow::Result<()> {
+        anyhow::bail!("FakeJail::add_secret is not implemented");
+    }
+
+    fn clear_secrets(&self) -> anyhow::Result<()> {
+        anyhow::bail!("FakeJail::clear_secrets is not implemented");
     }
 }

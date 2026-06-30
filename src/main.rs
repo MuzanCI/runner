@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use muzanci_runner::{
     RunnerState,
     capacity::{SharedAssignmentCapacity, SharedEvaluationCapacity},
     jail::FakeJailer,
     scheduler::{EvaluatorScheduler, WorkerScheduler},
+    secrets::SecretsService,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -22,6 +23,8 @@ async fn main() {
 
     let jailer = Arc::new(FakeJailer);
 
+    let secrets_service = Arc::new(SecretsService::new(HashMap::new()));
+
     let runner_state = Arc::new(RunnerState::new(
         cancellation_token,
         runner_id,
@@ -29,6 +32,7 @@ async fn main() {
         evaluation_capacity,
         assignment_capacity,
         jailer,
+        secrets_service,
     ));
 
     let evaluator_scheduler_handle = EvaluatorScheduler::spawn(runner_state.clone());

@@ -69,23 +69,8 @@ impl Evaluator {
         let repo_url = self.start_evaluation().await?;
 
         match self.run_evaluation(repo_url).await {
-            Ok(eval_result) => self
-                .channel_tx
-                .send(Message::Evaluator(EvaluatorMessage::CompleteRequest {
-                    evaluation_id: self.evaluation_id,
-                    pipelines: eval_result.pipelines,
-                    jobs: eval_result.jobs,
-                }))
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to send complete request: {:?}", e)),
-            Err(e) => self
-                .channel_tx
-                .send(Message::Evaluator(EvaluatorMessage::FailRequest {
-                    evaluation_id: self.evaluation_id,
-                    reason: e.to_string(),
-                }))
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to send fail request: {:?}", e)),
+            Ok(eval_result) => self.complete_evaluation(eval_result).await,
+            Err(e) => self.fail_evaluation(e.to_string()).await,
         }
     }
 
@@ -120,5 +105,42 @@ impl Evaluator {
             git_commit: "HEAD".to_string(),
         });
         interpreter.evaluate(&Path::new("muzan.py"))
+    }
+
+    async fn complete_evaluation(&mut self, eval_result: EvalResult) -> anyhow::Result<()> {
+        self.channel_tx
+            .send(Message::Evaluator(EvaluatorMessage::CompleteRequest {
+                evaluation_id: self.evaluation_id,
+                pipelines: eval_result.pipelines,
+                jobs: eval_result.jobs,
+            }))
+            .await?;
+
+        self.channel_rx
+            .recv()
+            .await
+            .ok_or(anyhow::anyhow!("Channel closed"))
+            .and_then(|response| match response {
+                Message::Evaluator(EvaluatorMessage::CompleteResponse) => Ok(()),
+                _ => Err(anyhow::anyhow!("Unexpected message type")),
+            })
+    }
+
+    async fn fail_evaluation(&mut self, reason: String) -> anyhow::Result<()> {
+        self.channel_tx
+            .send(Message::Evaluator(EvaluatorMessage::FailRequest {
+                evaluation_id: self.evaluation_id,
+                reason,
+            }))
+            .await?;
+
+        self.channel_rx
+            .recv()
+            .await
+            .ok_or(anyhow::anyhow!("Channel closed"))
+            .and_then(|response| match response {
+                Message::Evaluator(EvaluatorMessage::FailResponse) => Ok(()),
+                _ => Err(anyhow::anyhow!("Unexpected message type")),
+            })
     }
 }

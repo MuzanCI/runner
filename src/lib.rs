@@ -13,12 +13,15 @@ use tokio_util::sync::CancellationToken;
 use crate::capacity::SharedAssignmentCapacity;
 use crate::capacity::SharedEvaluationCapacity;
 use crate::jail::Jailer;
+use crate::secrets::SecretsService;
 
 pub mod capacity;
 pub mod evaluator;
 pub mod jail;
 pub mod logging;
 pub mod scheduler;
+pub mod secrets;
+pub mod worker;
 
 #[derive(Clone)]
 pub struct RunnerState {
@@ -28,6 +31,7 @@ pub struct RunnerState {
     evaluation_capacity: SharedEvaluationCapacity,
     assignment_capacity: SharedAssignmentCapacity,
     jailer: Arc<dyn Jailer>,
+    secrets_service: Arc<SecretsService>,
 }
 
 impl RunnerState {
@@ -38,6 +42,7 @@ impl RunnerState {
         evaluation_capacity: SharedEvaluationCapacity,
         assignment_capacity: SharedAssignmentCapacity,
         jailer: Arc<dyn Jailer>,
+        secrets_service: Arc<SecretsService>,
     ) -> Self {
         Self {
             cancellation_token,
@@ -46,6 +51,7 @@ impl RunnerState {
             evaluation_capacity,
             assignment_capacity,
             jailer,
+            secrets_service,
         }
     }
 }
