@@ -289,6 +289,7 @@ impl WorkerScheduler {
         self.channel_tx
             .send(Message::WorkerScheduler(
                 WorkerSchedulerMessage::ReserveTaskRequest {
+                    runner_id: self.runner_state.runner_id,
                     task_id: task.task_id,
                 },
             ))
@@ -310,13 +311,9 @@ impl WorkerScheduler {
             });
 
         match result {
-            Ok(assignment_id) => {
-                tracing::info!(
-                    "Successfully reserved task {:?} with assignment ID {:?}",
-                    task,
-                    assignment_id
-                );
-                Worker::spawn(self.runner_state.clone(), assignment_id);
+            Ok(()) => {
+                tracing::info!("Successfully reserved task {:?}", task,);
+                Worker::spawn(self.runner_state.clone(), task.task_id);
                 permit.commit();
                 Ok(())
             }

@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use muzanci_interpreter::{EvalContext, EvalResult, Interpreter};
 use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, EvaluationId, EvaluatorMessage, Message, RepoUrl,
+    ChannelReceiver, ChannelSender, ChannelType, EvaluatorId, EvaluatorMessage, Message, RepoUrl,
 };
 
 use crate::RunnerState;
@@ -26,11 +26,11 @@ pub struct Evaluator {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
     channel_rx: ChannelReceiver,
-    evaluation_id: EvaluationId,
+    evaluator_id: EvaluatorId,
 }
 
 impl Evaluator {
-    pub fn spawn(runner_state: Arc<RunnerState>, evaluation_id: EvaluationId) -> EvaluatorHandle {
+    pub fn spawn(runner_state: Arc<RunnerState>, evaluator_id: EvaluatorId) -> EvaluatorHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
             let (channel_tx, channel_rx) = runner_state
@@ -42,7 +42,7 @@ impl Evaluator {
                 runner_state,
                 channel_tx,
                 channel_rx,
-                evaluation_id,
+                evaluator_id,
             }
             .run()
             .await
@@ -77,7 +77,7 @@ impl Evaluator {
     async fn start_evaluation(&mut self) -> anyhow::Result<RepoUrl> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::StartRequest {
-                evaluation_id: self.evaluation_id,
+                evaluator_id: self.evaluator_id,
             }))
             .await?;
 
@@ -113,7 +113,7 @@ impl Evaluator {
     async fn complete_evaluation(&mut self, eval_result: EvalResult) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::CompleteRequest {
-                evaluation_id: self.evaluation_id,
+                evaluator_id: self.evaluator_id,
                 pipelines: eval_result.pipelines,
                 jobs: eval_result.jobs,
             }))
@@ -134,7 +134,7 @@ impl Evaluator {
     async fn fail_evaluation(&mut self, reason: String) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::FailRequest {
-                evaluation_id: self.evaluation_id,
+                evaluator_id: self.evaluator_id,
                 reason,
             }))
             .await?;
