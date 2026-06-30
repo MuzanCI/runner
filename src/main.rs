@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use muzanci_runner::{
     RunnerState,
     capacity::{SharedAssignmentCapacity, SharedEvaluationCapacity},
-    jail::FakeJailer,
+    sandbox::FakeSandboxer,
     scheduler::{EvaluatorScheduler, WorkerScheduler},
     secrets::SecretsService,
 };
@@ -21,7 +21,7 @@ async fn main() {
     let evaluation_capacity = SharedEvaluationCapacity::new(10);
     let assignment_capacity = SharedAssignmentCapacity::new(10);
 
-    let jailer = Arc::new(FakeJailer);
+    let sandboxer = Arc::new(FakeSandboxer);
 
     let secrets_service = Arc::new(SecretsService::new(HashMap::new()));
 
@@ -31,7 +31,7 @@ async fn main() {
         mux_handle,
         evaluation_capacity,
         assignment_capacity,
-        jailer,
+        sandboxer,
         secrets_service,
     ));
 

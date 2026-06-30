@@ -94,10 +94,11 @@ impl Evaluator {
     }
 
     async fn run_evaluation(&mut self, repo_url: RepoUrl) -> anyhow::Result<EvalResult> {
-        // Create jail.
-        let jail = self.runner_state.jailer.create()?;
+        // Create Sandbox.
+        let sandbox = self.runner_state.sandboxer.create()?;
         // git clone repo_url
-        jail.spawn(&format!("git clone {}", repo_url.to_string()))?
+        sandbox
+            .spawn(&format!("git clone {}", repo_url.to_string()))?
             .wait()
             .await?;
         // Parse muzan.py from root.

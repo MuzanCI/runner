@@ -1,17 +1,17 @@
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use tokio::process::{Child, Command};
 
 #[async_trait::async_trait]
-pub trait Jailer
+pub trait Sandboxer
 where
     Self: Send + Sync,
 {
-    fn create(&self) -> anyhow::Result<Box<dyn Jail>>;
+    fn create(&self) -> anyhow::Result<Arc<dyn Sandbox>>;
 }
 
 #[async_trait::async_trait]
-pub trait Jail
+pub trait Sandbox
 where
     Self: Send + Sync,
 {
@@ -21,23 +21,24 @@ where
     fn clear_secrets(&self) -> anyhow::Result<()>;
 }
 
-pub struct FakeJailer;
+pub struct FakeSandboxer;
 
-impl Jailer for FakeJailer {
-    fn create(&self) -> anyhow::Result<Box<dyn Jail>> {
-        Ok(Box::new(FakeJail))
+impl Sandboxer for FakeSandboxer {
+    fn create(&self) -> anyhow::Result<Arc<dyn Sandbox>> {
+        // create temporary filesystem.
+        Ok(Arc::new(FakeSandbox))
     }
 }
 
-pub struct FakeJail;
+pub struct FakeSandbox;
 
-pub struct JailCommand {
+pub struct SandboxCommand {
     command: String,
     args: Vec<String>,
     env: HashMap<String, String>,
 }
 
-impl Jail for FakeJail {
+impl Sandbox for FakeSandbox {
     fn spawn(&self, cmd_str: &str) -> anyhow::Result<Child> {
         // Create tmp directory.
         Ok(Command::new("sh").arg("-c").arg(cmd_str).spawn()?)
@@ -48,10 +49,10 @@ impl Jail for FakeJail {
     }
 
     fn add_secret(&self, name: &str, value: &str) -> anyhow::Result<()> {
-        anyhow::bail!("FakeJail::add_secret is not implemented");
+        anyhow::bail!("FakeSandbox::add_secret is not implemented");
     }
 
     fn clear_secrets(&self) -> anyhow::Result<()> {
-        anyhow::bail!("FakeJail::clear_secrets is not implemented");
+        anyhow::bail!("FakeSandbox::clear_secrets is not implemented");
     }
 }

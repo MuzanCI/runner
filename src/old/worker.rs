@@ -84,7 +84,7 @@ impl Worker {
             .unwrap();
 
         tokio::process::Command::new("echo")
-            .arg("Creating jail...")
+            .arg("Creating Sandbox...")
             .spawn()
             .unwrap();
 
@@ -111,7 +111,7 @@ impl Worker {
             .unwrap();
 
         tokio::process::Command::new("echo")
-            .arg("Destroying jail...")
+            .arg("Destroying Sandbox...")
             .spawn()
             .unwrap();
     }

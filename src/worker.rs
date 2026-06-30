@@ -1,11 +1,11 @@
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use muzanci_interpreter::{Step, StepId};
 use muzanci_transport::channel::{
     AssignmentId, ChannelReceiver, ChannelSender, ChannelType, Message, RepoUrl, WorkerMessage,
 };
 
-use crate::{RunnerState, jail::Jail};
+use crate::{RunnerState, sandbox::Sandbox};
 
 pub struct WorkerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -93,11 +93,11 @@ impl Worker {
     }
 
     async fn run_assignment(&mut self, steps: Vec<Step>) -> anyhow::Result<()> {
-        let jail = self.runner_state.jailer.create()?;
+        let sandbox = self.runner_state.sandboxer.create()?;
         for step in steps {
             let step_id = step.step_id;
             let step = self.start_step(step_id).await?;
-            match self.run_step(&jail, step).await {
+            match self.run_step(sandbox.clone(), step).await {
                 Ok(()) => self.complete_step(step_id).await?,
                 Err(e) => {
                     self.fail_step(step_id, e.to_string()).await?;
@@ -167,19 +167,19 @@ impl Worker {
             })
     }
 
-    async fn run_step(&mut self, jail: &Box<dyn Jail>, step: Step) -> anyhow::Result<()> {
+    async fn run_step(&mut self, sandbox: Arc<dyn Sandbox>, step: Step) -> anyhow::Result<()> {
         for secret in step.secrets {
             match self.runner_state.secrets_service.resolve(&secret).await {
-                Ok(value) => jail.add_secret(&secret.key, &value)?,
+                Ok(value) => sandbox.add_secret(&secret.key, &value)?,
                 Err(e) => {
                     tracing::warn!("Unable to resolve secret with key [{}]: {}", secret.key, e);
                     tracing::warn!("Skipping secret with key [{}]: {}", secret.key, e);
                 }
             }
         }
-        jail.spawn(&step.command)?;
+        sandbox.spawn(&step.command)?;
 
-        jail.clear_secrets()?;
+        sandbox.clear_secrets()?;
         Ok(())
     }
 
