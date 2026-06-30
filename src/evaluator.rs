@@ -86,7 +86,9 @@ impl Evaluator {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Evaluator(EvaluatorMessage::StartResponse { repo_url }) => Ok(repo_url),
+                Message::Evaluator(EvaluatorMessage::StartResponse { result }) => {
+                    result.map_err(|e| anyhow::anyhow!(e))
+                }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
@@ -121,7 +123,9 @@ impl Evaluator {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Evaluator(EvaluatorMessage::CompleteResponse) => Ok(()),
+                Message::Evaluator(EvaluatorMessage::CompleteResponse { result }) => {
+                    result.map_err(|e| anyhow::anyhow!(e))
+                }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
@@ -139,7 +143,9 @@ impl Evaluator {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Evaluator(EvaluatorMessage::FailResponse) => Ok(()),
+                Message::Evaluator(EvaluatorMessage::FailResponse { result }) => {
+                    result.map_err(|e| anyhow::anyhow!(e))
+                }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }

@@ -1,9 +1,8 @@
 use std::{path::Path, sync::Arc};
 
-use muzanci_interpreter::{EvalContext, EvalResult, Interpreter, Step, StepId};
+use muzanci_interpreter::{Step, StepId};
 use muzanci_transport::channel::{
-    Assignment, AssignmentId, ChannelReceiver, ChannelSender, ChannelType, Message, RepoUrl,
-    WorkerMessage,
+    AssignmentId, ChannelReceiver, ChannelSender, ChannelType, Message, RepoUrl, WorkerMessage,
 };
 
 use crate::{RunnerState, jail::Jail};
@@ -74,7 +73,7 @@ impl Worker {
         }
     }
 
-    async fn start_assignment(&mut self) -> anyhow::Result<Assignment> {
+    async fn start_assignment(&mut self) -> anyhow::Result<Vec<Step>> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::StartAssignmentRequest {
                 assignment_id: self.assignment_id,
@@ -86,16 +85,17 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::StartAssignmentResponse { assignment }) => {
-                    Ok(assignment)
+                Message::Worker(WorkerMessage::StartAssignmentResponse { result }) => {
+                    result.map_err(|e| anyhow::anyhow!(e))
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
 
-    async fn run_assignment(&mut self, assignment: Assignment) -> anyhow::Result<()> {
+    async fn run_assignment(&mut self, steps: Vec<Step>) -> anyhow::Result<()> {
         let jail = self.runner_state.jailer.create()?;
-        for step_id in assignment.step_ids {
+        for step in steps {
+            let step_id = step.step_id;
             let step = self.start_step(step_id).await?;
             match self.run_step(&jail, step).await {
                 Ok(()) => self.complete_step(step_id).await?,
@@ -120,7 +120,9 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::CompleteAssignmentResponse) => Ok(()),
+                Message::Worker(WorkerMessage::CompleteAssignmentResponse { result }) => {
+                    result.map_err(|e| anyhow::anyhow!(e))
+                }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
@@ -138,14 +140,19 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::FailAssignmentResponse) => Ok(()),
+                Message::Worker(WorkerMessage::FailAssignmentResponse { result }) => {
+                    result.map_err(|e| anyhow::anyhow!(e))
+                }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
 
     async fn start_step(&mut self, step_id: StepId) -> anyhow::Result<Step> {
         self.channel_tx
-            .send(Message::Worker(WorkerMessage::StartStepRequest { step_id }))
+            .send(Message::Worker(WorkerMessage::StartStepRequest {
+                assignment_id: self.assignment_id,
+                step_id,
+            }))
             .await?;
 
         self.channel_rx
@@ -179,6 +186,7 @@ impl Worker {
     async fn complete_step(&mut self, step_id: StepId) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::CompleteStepRequest {
+                assignment_id: self.assignment_id,
                 step_id,
             }))
             .await?;
@@ -188,7 +196,9 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::CompleteStepResponse) => Ok(()),
+                Message::Worker(WorkerMessage::CompleteStepResponse { result }) => {
+                    result.map_err(|e| anyhow::anyhow!(e))
+                }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
@@ -196,6 +206,7 @@ impl Worker {
     async fn fail_step(&mut self, step_id: StepId, reason: String) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::FailStepRequest {
+                assignment_id: self.assignment_id,
                 step_id,
                 reason,
             }))
@@ -206,7 +217,9 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::FailStepResponse) => Ok(()),
+                Message::Worker(WorkerMessage::FailStepResponse { result }) => {
+                    result.map_err(|e| anyhow::anyhow!(e))
+                }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
