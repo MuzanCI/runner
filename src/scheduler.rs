@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, EvaluatorSchedulerMessage, Message, WaitingTask,
-    WaitingTrigger, WorkerSchedulerMessage,
+    ChannelReceiver, ChannelSender, ChannelType, EvaluatorSchedulerMessage, Message, TaskId,
+    TriggerId, WaitingTask, WaitingTrigger, WorkerSchedulerMessage,
 };
 
 use crate::{RunnerState, evaluator::Evaluator, worker::Worker};
@@ -78,12 +78,20 @@ impl EvaluatorScheduler {
 
             // Iterate over triggers and attempt to reserve until capacity is reached or no more triggers are available.
             for trigger in triggers {
-                match self.reserve_trigger(&trigger).await {
+                let permit = self
+                    .runner_state
+                    .evaluation_capacity
+                    .reserve(trigger.capacity)
+                    .await?;
+                match self.reserve_trigger(trigger.trigger_id).await {
                     Ok(_) => {
                         tracing::info!("Successfully reserved trigger {:?}", trigger);
+                        Evaluator::spawn(self.runner_state.clone(), trigger.trigger_id);
+                        permit.commit();
                     }
                     Err(e) => {
                         tracing::error!("Failed to reserve trigger {:?}: {:?}", trigger, e);
+                        drop(permit);
                     }
                 }
             }
@@ -118,23 +126,14 @@ impl EvaluatorScheduler {
     }
 
     // Uses the reserve and commit pattern for cancellation safety.
-    async fn reserve_trigger(&mut self, trigger: &WaitingTrigger) -> anyhow::Result<()> {
-        let permit = self
-            .runner_state
-            .evaluation_capacity
-            .reserve(trigger.capacity)
-            .await?;
-
+    async fn reserve_trigger(&mut self, trigger_id: TriggerId) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::EvaluatorScheduler(
-                EvaluatorSchedulerMessage::ReserveTriggerRequest {
-                    trigger_id: trigger.trigger_id,
-                },
+                EvaluatorSchedulerMessage::ReserveTriggerRequest { trigger_id },
             ))
             .await?;
 
-        let result = self
-            .channel_rx
+        self.channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -146,25 +145,7 @@ impl EvaluatorScheduler {
                     eprintln!("Unexpected response: {:?}", response);
                     Err(anyhow::anyhow!("Unexpected response"))
                 }
-            });
-
-        match result {
-            Ok(evaluation_id) => {
-                tracing::info!(
-                    "Successfully reserved trigger {:?} with evaluation ID {:?}",
-                    trigger,
-                    evaluation_id
-                );
-                Evaluator::spawn(self.runner_state.clone(), evaluation_id);
-                permit.commit();
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Failed to reserve trigger {:?}: {:?}", trigger, e);
-                drop(permit);
-                Err(anyhow::anyhow!("Failed to reserve trigger: {:?}", e))
-            }
-        }
+            })
     }
 }
 
@@ -239,12 +220,20 @@ impl WorkerScheduler {
 
             // Iterate over tasks and attempt to reserve until capacity is reached or no more tasks are available.
             for task in tasks {
-                match self.reserve_task(&task).await {
+                let permit = self
+                    .runner_state
+                    .evaluation_capacity
+                    .reserve(task.capacity)
+                    .await?;
+                match self.reserve_task(task.task_id).await {
                     Ok(_) => {
                         tracing::info!("Successfully reserved task {:?}", task);
+                        Worker::spawn(self.runner_state.clone(), task.task_id);
+                        permit.commit();
                     }
                     Err(e) => {
                         tracing::error!("Failed to reserve task {:?}: {:?}", task, e);
+                        drop(permit);
                     }
                 }
             }
@@ -279,24 +268,17 @@ impl WorkerScheduler {
     }
 
     // Uses the reserve and commit pattern for cancellation safety.
-    async fn reserve_task(&mut self, task: &WaitingTask) -> anyhow::Result<()> {
-        let permit = self
-            .runner_state
-            .evaluation_capacity
-            .reserve(task.capacity)
-            .await?;
-
+    async fn reserve_task(&mut self, task_id: TaskId) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::WorkerScheduler(
                 WorkerSchedulerMessage::ReserveTaskRequest {
                     runner_id: self.runner_state.runner_id,
-                    task_id: task.task_id,
+                    task_id,
                 },
             ))
             .await?;
 
-        let result = self
-            .channel_rx
+        self.channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -308,20 +290,6 @@ impl WorkerScheduler {
                     eprintln!("Unexpected response: {:?}", response);
                     Err(anyhow::anyhow!("Unexpected response"))
                 }
-            });
-
-        match result {
-            Ok(()) => {
-                tracing::info!("Successfully reserved task {:?}", task,);
-                Worker::spawn(self.runner_state.clone(), task.task_id);
-                permit.commit();
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Failed to reserve task {:?}: {:?}", task, e);
-                drop(permit);
-                Err(anyhow::anyhow!("Failed to reserve task: {:?}", e))
-            }
-        }
+            })
     }
 }
