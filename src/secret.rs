@@ -2,11 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use muzanci_interpreter::Secret;
 
-pub struct SecretsService {
+pub struct SecretService {
     secrets: Arc<HashMap<String, String>>,
 }
 
-impl SecretsService {
+impl SecretService {
     pub fn new(secrets: HashMap<String, String>) -> Self {
         Self {
             secrets: Arc::new(secrets),

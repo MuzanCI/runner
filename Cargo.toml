@@ -36,6 +36,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-appender = "0.2.5"
 tracing-error = "0.2.1"
+serde_json = "1.0.150"
 
 [lib]
 name = "muzanci_runner"

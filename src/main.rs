@@ -5,7 +5,7 @@ use muzanci_runner::{
     capacity::{SharedAssignmentCapacity, SharedEvaluationCapacity},
     sandbox::FakeSandboxer,
     scheduler::{EvaluatorScheduler, WorkerScheduler},
-    secrets::SecretsService,
+    secret::SecretService,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -21,9 +21,8 @@ async fn main() {
     let evaluation_capacity = SharedEvaluationCapacity::new(10);
     let assignment_capacity = SharedAssignmentCapacity::new(10);
 
-    let sandboxer = Arc::new(FakeSandboxer);
-
-    let secrets_service = Arc::new(SecretsService::new(HashMap::new()));
+    let secrets_service = Arc::new(SecretService::new(HashMap::new()));
+    let sandboxer = Arc::new(FakeSandboxer::new(secrets_service));
 
     let runner_state = Arc::new(RunnerState::new(
         cancellation_token,
@@ -32,7 +31,6 @@ async fn main() {
         evaluation_capacity,
         assignment_capacity,
         sandboxer,
-        secrets_service,
     ));
 
     let evaluator_scheduler_handle = EvaluatorScheduler::spawn(runner_state.clone());

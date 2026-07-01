@@ -129,7 +129,10 @@ impl EvaluatorScheduler {
     async fn reserve_trigger(&mut self, trigger_id: TriggerId) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::EvaluatorScheduler(
-                EvaluatorSchedulerMessage::ReserveTriggerRequest { trigger_id },
+                EvaluatorSchedulerMessage::ReserveTriggerRequest {
+                    runner_id: self.runner_state.runner_id,
+                    trigger_id,
+                },
             ))
             .await?;
 
@@ -142,7 +145,7 @@ impl EvaluatorScheduler {
                     EvaluatorSchedulerMessage::ReserveTriggerResponse { result },
                 ) => result.map_err(|e| anyhow::anyhow!(e)),
                 _ => {
-                    eprintln!("Unexpected response: {:?}", response);
+                    tracing::error!("Unexpected response: {:?}", response);
                     Err(anyhow::anyhow!("Unexpected response"))
                 }
             })

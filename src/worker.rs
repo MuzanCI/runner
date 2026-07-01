@@ -2,10 +2,14 @@ use std::sync::Arc;
 
 use muzanci_interpreter::{Step, StepId};
 use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, Message, RepoUrl, TaskId, WorkerMessage,
+    ChannelReceiver, ChannelSender, ChannelType, Message, TaskId, WorkerMessage,
 };
+use tokio::{join, sync::mpsc};
 
-use crate::{RunnerState, sandbox::Sandbox};
+use crate::{
+    RunnerState,
+    sandbox::{Output, Sandbox},
+};
 
 pub struct WorkerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -27,6 +31,11 @@ pub struct Worker {
     channel_tx: ChannelSender,
     channel_rx: ChannelReceiver,
     task_id: TaskId,
+}
+
+enum StepResult {
+    Continue,
+    Fail(String),
 }
 
 impl Worker {
@@ -67,10 +76,21 @@ impl Worker {
 
     async fn main(&mut self) -> anyhow::Result<()> {
         let steps = self.start().await?;
-        match self.run_steps(steps).await {
-            Ok(()) => self.complete().await,
-            Err(e) => self.fail(e.to_string()).await,
+        let sandbox = self.runner_state.sandboxer.create()?;
+        for step in steps {
+            match self.run_step(sandbox.clone(), step).await? {
+                StepResult::Continue => {
+                    continue;
+                }
+                StepResult::Fail(reason) => {
+                    self.fail(reason).await?;
+                    // The step failed so we stop, but the worker itself
+                    // is considered successful.
+                    return Ok(());
+                }
+            }
         }
+        self.complete().await
     }
 
     async fn start(&mut self) -> anyhow::Result<Vec<Step>> {
@@ -93,20 +113,66 @@ impl Worker {
             })
     }
 
-    async fn run_steps(&mut self, steps: Vec<Step>) -> anyhow::Result<()> {
-        let sandbox = self.runner_state.sandboxer.create()?;
-        for step in steps {
-            let step_id = step.step_id;
-            self.start_step(step_id).await?;
-            match self.run_step(sandbox.clone(), step).await {
-                Ok(()) => self.complete_step(step_id).await?,
-                Err(e) => {
-                    self.fail_step(step_id, e.to_string()).await?;
-                    return Err(anyhow::anyhow!("Step {} failed: {}", step_id, e));
-                }
+    async fn run_step(
+        &mut self,
+        sandbox: Arc<dyn Sandbox>,
+        step: Step,
+    ) -> anyhow::Result<StepResult> {
+        let step_id = step.step_id;
+        self.start_step(step_id).await?;
+
+        let exit_status = {
+            let (output_tx, output_rx) = mpsc::channel(1);
+            let output_handle = WorkerStepOutput::spawn(
+                self.runner_state.clone(),
+                self.channel_tx.clone(),
+                self.task_id,
+                step_id,
+                output_rx,
+            );
+            let process_handle = sandbox.run(&step.command, step.secrets.clone(), output_tx);
+            let (process_result, _output_result) = join!(process_handle, output_handle);
+            process_result?
+        };
+
+        match exit_status.code() {
+            Some(0) => {
+                self.channel_tx
+                    .send(Message::Worker(WorkerMessage::ExitCode {
+                        runner_id: self.runner_state.runner_id,
+                        task_id: self.task_id,
+                        step_id,
+                        exit_code: 0,
+                    }))
+                    .await?;
+                self.complete_step(step_id).await?;
+                Ok(StepResult::Continue)
+            }
+            Some(exit_code) => {
+                self.channel_tx
+                    .send(Message::Worker(WorkerMessage::ExitCode {
+                        runner_id: self.runner_state.runner_id,
+                        task_id: self.task_id,
+                        step_id,
+                        exit_code,
+                    }))
+                    .await?;
+                self.fail_step(
+                    step_id,
+                    format!("Process exited with non-zero status code: [{}]", exit_code),
+                )
+                .await?;
+                Ok(StepResult::Fail(format!(
+                    "Process exited with non-zero status code: [{}]",
+                    exit_code
+                )))
+            }
+            None => {
+                self.fail_step(step_id, "Process terminated by signal".to_string())
+                    .await?;
+                Ok(StepResult::Fail("Process terminated by signal".to_string()))
             }
         }
-        Ok(())
     }
 
     async fn complete(&mut self) -> anyhow::Result<()> {
@@ -171,22 +237,6 @@ impl Worker {
             })
     }
 
-    async fn run_step(&mut self, sandbox: Arc<dyn Sandbox>, step: Step) -> anyhow::Result<()> {
-        for secret in step.secrets {
-            match self.runner_state.secrets_service.resolve(&secret).await {
-                Ok(value) => sandbox.add_secret(&secret.key, &value)?,
-                Err(e) => {
-                    tracing::warn!("Unable to resolve secret with key [{}]: {}", secret.key, e);
-                    tracing::warn!("Skipping secret with key [{}]: {}", secret.key, e);
-                }
-            }
-        }
-        sandbox.spawn(&step.command)?;
-
-        sandbox.clear_secrets()?;
-        Ok(())
-    }
-
     async fn complete_step(&mut self, step_id: StepId) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::CompleteStepRequest {
@@ -228,5 +278,109 @@ impl Worker {
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
+    }
+}
+
+pub struct WorkerStepOutputHandle {
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl Future for WorkerStepOutputHandle {
+    type Output = Result<(), tokio::task::JoinError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::pin::Pin::new(&mut self.handle).poll(cx)
+    }
+}
+
+pub struct WorkerStepOutput {
+    runner_state: Arc<RunnerState>,
+    channel_tx: ChannelSender,
+    task_id: TaskId,
+    step_id: StepId,
+    output_rx: mpsc::Receiver<Output>,
+}
+
+impl WorkerStepOutput {
+    pub fn spawn(
+        runner_state: Arc<RunnerState>,
+        channel_tx: ChannelSender,
+        task_id: TaskId,
+        step_id: StepId,
+        output_rx: mpsc::Receiver<Output>,
+    ) -> WorkerStepOutputHandle {
+        let runner_state = runner_state.clone();
+        let handle = tokio::spawn(async move {
+            WorkerStepOutput {
+                runner_state,
+                channel_tx,
+                task_id,
+                step_id,
+                output_rx,
+            }
+            .run()
+            .await
+            .unwrap();
+        });
+        WorkerStepOutputHandle { handle }
+    }
+
+    async fn run(&mut self) -> anyhow::Result<()> {
+        let cancellation_token = self.runner_state.cancellation_token.clone();
+        tokio::select! {
+            _ = cancellation_token.cancelled() => {
+                eprintln!("WorkerStepOutput received cancellation signal.");
+                Ok(())
+            }
+
+            result = self.main() => {
+                result
+            }
+        }
+    }
+
+    async fn main(&mut self) -> anyhow::Result<()> {
+        while let Some(output) = self.output_rx.recv().await {
+            match output {
+                Output::Stdout(line) => {
+                    tracing::info!("Sending Worker stdout line. [{}] characters", line.len());
+                    let result = self
+                        .channel_tx
+                        .send(Message::Worker(WorkerMessage::StdoutLine {
+                            runner_id: self.runner_state.runner_id,
+                            task_id: self.task_id,
+                            step_id: self.step_id,
+                            line,
+                        }))
+                        .await;
+
+                    if let Err(e) = result {
+                        tracing::error!("Failed to send stdout line: {}", e);
+                        anyhow::bail!("Failed to send stdout line: {}", e);
+                    }
+                }
+                Output::Stderr(line) => {
+                    tracing::info!("Sending Worker stderr line. [{}] characters", line.len());
+                    let result = self
+                        .channel_tx
+                        .send(Message::Worker(WorkerMessage::StderrLine {
+                            runner_id: self.runner_state.runner_id,
+                            task_id: self.task_id,
+                            step_id: self.step_id,
+                            line,
+                        }))
+                        .await;
+
+                    if let Err(e) = result {
+                        tracing::error!("Failed to send stderr line: {}", e);
+                        anyhow::bail!("Failed to send stderr line: {}", e);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
