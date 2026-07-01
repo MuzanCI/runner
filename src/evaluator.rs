@@ -5,7 +5,8 @@ use std::{
 
 use muzanci_interpreter::{EvalContext, EvalResult, Interpreter, Step};
 use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, EvaluatorMessage, Message, RepoUrl, TriggerId,
+    ChannelReceiver, ChannelSender, ChannelType, EvaluatorMessage, ExitStatus, Message, RepoUrl,
+    TriggerId,
 };
 use tokio::sync::mpsc;
 
@@ -130,33 +131,32 @@ impl Evaluator {
             let secrets = vec![]; // TODO: Optionally add secrets for evaluator.
             let process_handle = sandbox.run(&command, secrets, output_tx);
             let (process_result, _output_result) = tokio::join!(process_handle, output_handle);
-            process_result?
+
+            match process_result?.code() {
+                Some(code) => ExitStatus::Code(code),
+                None => ExitStatus::Signal,
+            }
         };
 
-        match exit_status.code() {
-            Some(0) => {
-                self.channel_tx
-                    .send(Message::Evaluator(EvaluatorMessage::ExitCode {
-                        runner_id: self.runner_state.runner_id,
-                        trigger_id: self.trigger_id,
-                        exit_code: 0,
-                    }))
-                    .await?
+        self.channel_tx
+            .send(Message::Evaluator(EvaluatorMessage::ExitStatus {
+                runner_id: self.runner_state.runner_id,
+                trigger_id: self.trigger_id,
+                exit_status,
+            }))
+            .await?;
+
+        match exit_status {
+            ExitStatus::Code(code) if code == 0 => {
+                // Evaluator process completed successfully.
             }
-            Some(exit_code) => {
-                self.channel_tx
-                    .send(Message::Evaluator(EvaluatorMessage::ExitCode {
-                        runner_id: self.runner_state.runner_id,
-                        trigger_id: self.trigger_id,
-                        exit_code,
-                    }))
-                    .await?;
-                anyhow::bail!("Evaluator exited with non-zero exit code: {}", exit_code)
+            ExitStatus::Code(code) => {
+                anyhow::bail!("Evaluator exited with non-zero status code: {}", code);
             }
-            None => {
-                anyhow::bail!("Evaluator process terminated by signal")
+            ExitStatus::Signal => {
+                anyhow::bail!("Evaluator terminated by signal.");
             }
-        };
+        }
 
         let eval_result_json = sandbox.read_file(&eval_result_path).await?;
         let eval_result = serde_json::from_str(&eval_result_json)?;

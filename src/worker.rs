@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use muzanci_interpreter::{Step, StepId};
 use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, Message, TaskId, WorkerMessage,
+    ChannelReceiver, ChannelSender, ChannelType, ExitStatus, Message, TaskId, WorkerMessage,
 };
 use tokio::{join, sync::mpsc};
 
@@ -132,42 +132,39 @@ impl Worker {
             );
             let process_handle = sandbox.run(&step.command, step.secrets.clone(), output_tx);
             let (process_result, _output_result) = join!(process_handle, output_handle);
-            process_result?
+
+            match process_result?.code() {
+                Some(code) => ExitStatus::Code(code),
+                None => ExitStatus::Signal,
+            }
         };
 
-        match exit_status.code() {
-            Some(0) => {
-                self.channel_tx
-                    .send(Message::Worker(WorkerMessage::ExitCode {
-                        runner_id: self.runner_state.runner_id,
-                        task_id: self.task_id,
-                        step_id,
-                        exit_code: 0,
-                    }))
-                    .await?;
+        self.channel_tx
+            .send(Message::Worker(WorkerMessage::ExitStatus {
+                runner_id: self.runner_state.runner_id,
+                task_id: self.task_id,
+                step_id,
+                exit_status,
+            }))
+            .await?;
+
+        match exit_status {
+            ExitStatus::Code(code) if code == 0 => {
                 self.complete_step(step_id).await?;
                 Ok(StepResult::Continue)
             }
-            Some(exit_code) => {
-                self.channel_tx
-                    .send(Message::Worker(WorkerMessage::ExitCode {
-                        runner_id: self.runner_state.runner_id,
-                        task_id: self.task_id,
-                        step_id,
-                        exit_code,
-                    }))
-                    .await?;
+            ExitStatus::Code(code) => {
                 self.fail_step(
                     step_id,
-                    format!("Process exited with non-zero status code: [{}]", exit_code),
+                    format!("Process exited with non-zero status code: [{}]", code),
                 )
                 .await?;
                 Ok(StepResult::Fail(format!(
                     "Process exited with non-zero status code: [{}]",
-                    exit_code
+                    code
                 )))
             }
-            None => {
+            ExitStatus::Signal => {
                 self.fail_step(step_id, "Process terminated by signal".to_string())
                     .await?;
                 Ok(StepResult::Fail("Process terminated by signal".to_string()))
