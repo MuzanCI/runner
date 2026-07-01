@@ -2,14 +2,12 @@ use std::sync::Arc;
 
 use muzanci_interpreter::{Step, StepId};
 use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, ExitStatus, Message, TaskId, WorkerMessage,
+    ChannelReceiver, ChannelSender, ChannelType, ExitStatus, Message, ProcessOutput, TaskId,
+    WorkerMessage,
 };
 use tokio::{join, sync::mpsc};
 
-use crate::{
-    RunnerState,
-    sandbox::{Output, Sandbox},
-};
+use crate::{RunnerState, sandbox::Sandbox};
 
 pub struct WorkerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -140,7 +138,7 @@ impl Worker {
         };
 
         self.channel_tx
-            .send(Message::Worker(WorkerMessage::ExitStatus {
+            .send(Message::Worker(WorkerMessage::StepProcessExitStatus {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
                 step_id,
@@ -298,7 +296,7 @@ pub struct WorkerStepOutput {
     channel_tx: ChannelSender,
     task_id: TaskId,
     step_id: StepId,
-    output_rx: mpsc::Receiver<Output>,
+    output_rx: mpsc::Receiver<ProcessOutput>,
 }
 
 impl WorkerStepOutput {
@@ -307,7 +305,7 @@ impl WorkerStepOutput {
         channel_tx: ChannelSender,
         task_id: TaskId,
         step_id: StepId,
-        output_rx: mpsc::Receiver<Output>,
+        output_rx: mpsc::Receiver<ProcessOutput>,
     ) -> WorkerStepOutputHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
@@ -341,41 +339,19 @@ impl WorkerStepOutput {
 
     async fn main(&mut self) -> anyhow::Result<()> {
         while let Some(output) = self.output_rx.recv().await {
-            match output {
-                Output::Stdout(line) => {
-                    tracing::info!("Sending Worker stdout line. [{}] characters", line.len());
-                    let result = self
-                        .channel_tx
-                        .send(Message::Worker(WorkerMessage::StdoutLine {
-                            runner_id: self.runner_state.runner_id,
-                            task_id: self.task_id,
-                            step_id: self.step_id,
-                            line,
-                        }))
-                        .await;
+            let result = self
+                .channel_tx
+                .send(Message::Worker(WorkerMessage::StepProcessOutput {
+                    runner_id: self.runner_state.runner_id,
+                    task_id: self.task_id,
+                    step_id: self.step_id,
+                    output,
+                }))
+                .await;
 
-                    if let Err(e) = result {
-                        tracing::error!("Failed to send stdout line: {}", e);
-                        anyhow::bail!("Failed to send stdout line: {}", e);
-                    }
-                }
-                Output::Stderr(line) => {
-                    tracing::info!("Sending Worker stderr line. [{}] characters", line.len());
-                    let result = self
-                        .channel_tx
-                        .send(Message::Worker(WorkerMessage::StderrLine {
-                            runner_id: self.runner_state.runner_id,
-                            task_id: self.task_id,
-                            step_id: self.step_id,
-                            line,
-                        }))
-                        .await;
-
-                    if let Err(e) = result {
-                        tracing::error!("Failed to send stderr line: {}", e);
-                        anyhow::bail!("Failed to send stderr line: {}", e);
-                    }
-                }
+            if let Err(e) = result {
+                tracing::error!("Failed to send worker step process output: {}", e);
+                anyhow::bail!("Failed to send worker step process output: {}", e);
             }
         }
         Ok(())

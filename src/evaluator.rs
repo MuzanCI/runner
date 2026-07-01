@@ -5,15 +5,12 @@ use std::{
 
 use muzanci_interpreter::{EvalContext, EvalResult, Interpreter, Step};
 use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, EvaluatorMessage, ExitStatus, Message, RepoUrl,
-    TriggerId,
+    ChannelReceiver, ChannelSender, ChannelType, EvaluatorMessage, ExitStatus, Message,
+    ProcessOutput, RepoUrl, TriggerId,
 };
 use tokio::sync::mpsc;
 
-use crate::{
-    RunnerState,
-    sandbox::{Output, Sandbox},
-};
+use crate::{RunnerState, sandbox::Sandbox};
 
 pub struct EvaluatorHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -116,7 +113,7 @@ impl Evaluator {
 
         let exit_status = {
             let (output_tx, output_rx) = mpsc::channel(1);
-            let output_handle = EvaluatorStepOutput::spawn(
+            let output_handle = EvaluatorProcessOutput::spawn(
                 self.runner_state.clone(),
                 self.channel_tx.clone(),
                 self.trigger_id,
@@ -139,7 +136,7 @@ impl Evaluator {
         };
 
         self.channel_tx
-            .send(Message::Evaluator(EvaluatorMessage::ExitStatus {
+            .send(Message::Evaluator(EvaluatorMessage::ProcessExitStatus {
                 runner_id: self.runner_state.runner_id,
                 trigger_id: self.trigger_id,
                 exit_status,
@@ -207,11 +204,11 @@ impl Evaluator {
     }
 }
 
-pub struct EvaluatorStepOutputHandle {
+pub struct EvaluatorProcessOutputHandle {
     handle: tokio::task::JoinHandle<()>,
 }
 
-impl Future for EvaluatorStepOutputHandle {
+impl Future for EvaluatorProcessOutputHandle {
     type Output = Result<(), tokio::task::JoinError>;
 
     fn poll(
@@ -222,23 +219,23 @@ impl Future for EvaluatorStepOutputHandle {
     }
 }
 
-pub struct EvaluatorStepOutput {
+pub struct EvaluatorProcessOutput {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
     trigger_id: TriggerId,
-    output_rx: mpsc::Receiver<Output>,
+    output_rx: mpsc::Receiver<ProcessOutput>,
 }
 
-impl EvaluatorStepOutput {
+impl EvaluatorProcessOutput {
     pub fn spawn(
         runner_state: Arc<RunnerState>,
         channel_tx: ChannelSender,
         trigger_id: TriggerId,
-        output_rx: mpsc::Receiver<Output>,
-    ) -> EvaluatorStepOutputHandle {
+        output_rx: mpsc::Receiver<ProcessOutput>,
+    ) -> EvaluatorProcessOutputHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
-            EvaluatorStepOutput {
+            EvaluatorProcessOutput {
                 runner_state,
                 channel_tx,
                 trigger_id,
@@ -248,14 +245,14 @@ impl EvaluatorStepOutput {
             .await
             .unwrap();
         });
-        EvaluatorStepOutputHandle { handle }
+        EvaluatorProcessOutputHandle { handle }
     }
 
     async fn run(&mut self) -> anyhow::Result<()> {
         let cancellation_token = self.runner_state.cancellation_token.clone();
         tokio::select! {
             _ = cancellation_token.cancelled() => {
-                eprintln!("EvaluatorStepOutput received cancellation signal.");
+                eprintln!("EvaluatorProcessOutput received cancellation signal.");
                 Ok(())
             }
 
@@ -267,39 +264,18 @@ impl EvaluatorStepOutput {
 
     async fn main(&mut self) -> anyhow::Result<()> {
         while let Some(output) = self.output_rx.recv().await {
-            match output {
-                Output::Stdout(line) => {
-                    tracing::info!("Sending Evaluator stdout line. [{}] characters", line.len());
-                    let result = self
-                        .channel_tx
-                        .send(Message::Evaluator(EvaluatorMessage::StdoutLine {
-                            runner_id: self.runner_state.runner_id,
-                            trigger_id: self.trigger_id,
-                            line,
-                        }))
-                        .await;
+            let result = self
+                .channel_tx
+                .send(Message::Evaluator(EvaluatorMessage::ProcessOutput {
+                    runner_id: self.runner_state.runner_id,
+                    trigger_id: self.trigger_id,
+                    output,
+                }))
+                .await;
 
-                    if let Err(e) = result {
-                        tracing::error!("Failed to send stdout line: {}", e);
-                        anyhow::bail!("Failed to send stdout line: {}", e);
-                    }
-                }
-                Output::Stderr(line) => {
-                    tracing::info!("Sending Evaluator stderr line. [{}] characters", line.len());
-                    let result = self
-                        .channel_tx
-                        .send(Message::Evaluator(EvaluatorMessage::StderrLine {
-                            runner_id: self.runner_state.runner_id,
-                            trigger_id: self.trigger_id,
-                            line,
-                        }))
-                        .await;
-
-                    if let Err(e) = result {
-                        tracing::error!("Failed to send stderr line: {}", e);
-                        anyhow::bail!("Failed to send stderr line: {}", e);
-                    }
-                }
+            if let Err(e) = result {
+                tracing::error!("Failed to send process output: {}", e);
+                anyhow::bail!("Failed to send process output: {}", e);
             }
         }
         Ok(())

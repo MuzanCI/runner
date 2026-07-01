@@ -6,6 +6,7 @@ use std::{
 
 use futures::StreamExt;
 use muzanci_interpreter::Secret;
+use muzanci_transport::channel::ProcessOutput;
 use tokio::{process::Command, sync::mpsc};
 use tokio_util::codec::{FramedRead, LinesCodec};
 
@@ -45,11 +46,6 @@ impl Sandboxer for FakeSandboxer {
 
 pub type SandboxId = uuid::Uuid;
 
-pub enum Output {
-    Stdout(String),
-    Stderr(String),
-}
-
 #[async_trait::async_trait]
 pub trait Sandbox
 where
@@ -59,7 +55,7 @@ where
         &self,
         command: &str,
         secrets: Vec<Secret>,
-        output_tx: mpsc::Sender<Output>,
+        output_tx: mpsc::Sender<ProcessOutput>,
     ) -> anyhow::Result<ExitStatus>;
 
     async fn create_executable_file(&self, path: &Path, content: &[u8]) -> anyhow::Result<()>;
@@ -77,7 +73,7 @@ impl Sandbox for FakeSandbox {
         &self,
         command: &str,
         secrets: Vec<Secret>,
-        output_tx: mpsc::Sender<Output>,
+        output_tx: mpsc::Sender<ProcessOutput>,
     ) -> anyhow::Result<ExitStatus> {
         let envs = {
             let mut envs = vec![];
@@ -115,7 +111,7 @@ impl Sandbox for FakeSandbox {
             while let Some(result) = stdout_lines.next().await {
                 match result {
                     Ok(line) => {
-                        stdout_tx.send(Output::Stdout(line)).await.unwrap();
+                        stdout_tx.send(ProcessOutput::Stdout(line)).await.unwrap();
                     }
                     Err(e) => {
                         eprintln!("Error reading stdout: {}", e);
@@ -130,7 +126,7 @@ impl Sandbox for FakeSandbox {
             while let Some(result) = stderr_lines.next().await {
                 match result {
                     Ok(line) => {
-                        stderr_tx.send(Output::Stderr(line)).await.unwrap();
+                        stderr_tx.send(ProcessOutput::Stderr(line)).await.unwrap();
                     }
                     Err(e) => {
                         eprintln!("Error reading stderr: {}", e);
