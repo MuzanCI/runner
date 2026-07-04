@@ -165,8 +165,7 @@ impl Evaluator {
             .send(Message::Evaluator(EvaluatorMessage::CompleteRequest {
                 runner_id: self.runner_state.runner_id,
                 trigger_id: self.trigger_id,
-                pipelines: eval_result.pipelines,
-                jobs: eval_result.jobs,
+                eval_result,
             }))
             .await?;
 
