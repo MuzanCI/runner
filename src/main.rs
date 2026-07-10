@@ -1,12 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use muzanci_runner::{
-    RunnerState,
-    capacity::{SharedAssignmentCapacity, SharedEvaluationCapacity},
-    sandbox::FakeSandboxer,
-    scheduler::{EvaluatorScheduler, WorkerScheduler},
-    secret::SecretService,
-};
+use muzanci_runner::RunnerState;
+use muzanci_runner::capacity::SharedAssignmentCapacity;
+use muzanci_runner::capacity::SharedEvaluationCapacity;
+use muzanci_runner::sandbox::FakeSandboxer;
+use muzanci_runner::scheduler::EvaluatorScheduler;
+use muzanci_runner::scheduler::WorkerScheduler;
+use muzanci_runner::secret::SecretService;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -15,7 +16,9 @@ async fn main() {
 
     let cancellation_token = CancellationToken::new();
     let hostname = "localhost:8002";
-    let (runner_id, mux_handle) = muzanci_runner::connect(hostname).await.unwrap();
+    let (runner_id, mux_handle) = muzanci_runner::connect(hostname, cancellation_token.clone())
+        .await
+        .unwrap();
     tracing::info!("Assigned runner ID [{}]", runner_id);
 
     let evaluation_capacity = SharedEvaluationCapacity::new(10);

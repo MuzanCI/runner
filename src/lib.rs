@@ -52,7 +52,10 @@ impl RunnerState {
     }
 }
 
-pub async fn connect(hostname: &str) -> anyhow::Result<(RunnerId, MuxHandle)> {
+pub async fn connect(
+    hostname: &str,
+    cancellation_token: CancellationToken,
+) -> anyhow::Result<(RunnerId, MuxHandle)> {
     let server_stream = {
         let stream = tokio::net::TcpStream::connect(hostname).await?;
         stream.set_nodelay(true)?;
@@ -108,7 +111,7 @@ pub async fn connect(hostname: &str) -> anyhow::Result<(RunnerId, MuxHandle)> {
         );
     });
 
-    let mux_handle = Mux::spawn(server_stream, channel_acceptor);
+    let mux_handle = Mux::spawn(server_stream, channel_acceptor, cancellation_token);
 
     Ok((runner_id, mux_handle))
 }

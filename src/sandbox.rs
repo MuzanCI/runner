@@ -1,14 +1,15 @@
-use std::{
-    path::{Path, PathBuf},
-    process::ExitStatus,
-    sync::Arc,
-};
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::ExitStatus;
+use std::sync::Arc;
 
 use futures::StreamExt;
 use muzanci_interpreter::Secret;
 use muzanci_transport::channel::ProcessOutput;
-use tokio::{process::Command, sync::mpsc};
-use tokio_util::codec::{FramedRead, LinesCodec};
+use tokio::process::Command;
+use tokio::sync::mpsc;
+use tokio_util::codec::FramedRead;
+use tokio_util::codec::LinesCodec;
 
 use crate::secret::SecretService;
 
@@ -108,10 +109,15 @@ impl Sandbox for FakeSandbox {
 
         let stdout_tx = output_tx.clone();
         let stdout_handle = tokio::spawn(async move {
+            let mut index = 0;
             while let Some(result) = stdout_lines.next().await {
                 match result {
                     Ok(line) => {
-                        stdout_tx.send(ProcessOutput::Stdout(line)).await.unwrap();
+                        stdout_tx
+                            .send(ProcessOutput::Stdout { index, line })
+                            .await
+                            .unwrap();
+                        index += 1;
                     }
                     Err(e) => {
                         eprintln!("Error reading stdout: {}", e);
@@ -123,10 +129,15 @@ impl Sandbox for FakeSandbox {
 
         let stderr_tx = output_tx;
         let stderr_handle = tokio::spawn(async move {
+            let mut index = 0;
             while let Some(result) = stderr_lines.next().await {
                 match result {
                     Ok(line) => {
-                        stderr_tx.send(ProcessOutput::Stderr(line)).await.unwrap();
+                        stderr_tx
+                            .send(ProcessOutput::Stderr { index, line })
+                            .await
+                            .unwrap();
+                        index += 1;
                     }
                     Err(e) => {
                         eprintln!("Error reading stderr: {}", e);

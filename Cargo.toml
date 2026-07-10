@@ -16,7 +16,7 @@ tokio = { version = "1.52.3", features = [
 ] }
 muzanci-transport = { path = "../muzanci-transport" }
 muzanci-interpreter = { path = "../muzanci-interpreter" }
-rustls = "0.23.40"
+rustls = { version = "0.23.40", default-features = false, features = ["ring", "tls12"] }
 tokio-rustls = "0.26.4"
 anyhow = "1.0.102"
 hyper-util = { version = "0.1.20", features = ["tokio"] }

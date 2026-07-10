@@ -5,12 +5,14 @@ use std::{
 
 use muzanci_interpreter::{EvalContext, EvalResult, Interpreter, Step};
 use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, EvaluatorMessage, ExitStatus, Message,
-    ProcessOutput, RepoUrl, TriggerId,
+    ChannelReceiver, ChannelSender, ChannelType, EvaluatorMessage, ExitStatus, GitCloneUrl,
+    Message, ProcessOutput, TriggerId,
 };
 use tokio::sync::mpsc;
 
 use crate::{RunnerState, sandbox::Sandbox};
+
+const INTERPRETER_BIN_BYTES: &[u8] = include_bytes!("../embed/interpreter");
 
 pub struct EvaluatorHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -71,15 +73,15 @@ impl Evaluator {
     }
 
     async fn main(&mut self) -> anyhow::Result<()> {
-        let repo_url = self.start().await?;
+        let git_clone_url = self.start().await?;
         let sandbox = self.runner_state.sandboxer.create()?;
-        match self.evaluate(sandbox, repo_url).await {
+        match self.evaluate(sandbox, git_clone_url).await {
             Ok(eval_result) => self.complete(eval_result).await,
             Err(e) => self.fail(e.to_string()).await,
         }
     }
 
-    async fn start(&mut self) -> anyhow::Result<RepoUrl> {
+    async fn start(&mut self) -> anyhow::Result<GitCloneUrl> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::StartRequest {
                 runner_id: self.runner_state.runner_id,
@@ -102,15 +104,14 @@ impl Evaluator {
     async fn evaluate(
         &mut self,
         sandbox: Arc<dyn Sandbox>,
-        repo_url: RepoUrl,
+        git_clone_url: GitCloneUrl,
     ) -> anyhow::Result<EvalResult> {
-        let evaluator_path = PathBuf::from("evaluator");
-        let contents = &[0x0];
-        let eval_result_path = PathBuf::from("pipeline.json");
+        let interpreter_path = PathBuf::from("./interpreter");
         sandbox
-            .create_executable_file(&evaluator_path, contents)
+            .create_executable_file(&interpreter_path, INTERPRETER_BIN_BYTES)
             .await?;
 
+        let eval_result_path = PathBuf::from("./muzanci.eval_result.json");
         let exit_status = {
             let (output_tx, output_rx) = mpsc::channel(1);
             let output_handle = EvaluatorProcessOutput::spawn(
@@ -121,9 +122,9 @@ impl Evaluator {
             );
             let command = format!(
                 "./{} -o {} {}",
-                evaluator_path.display(),
+                interpreter_path.display(),
                 eval_result_path.display(),
-                repo_url
+                git_clone_url
             );
             let secrets = vec![]; // TODO: Optionally add secrets for evaluator.
             let process_handle = sandbox.run(&command, secrets, output_tx);
