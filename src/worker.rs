@@ -1,13 +1,21 @@
 use std::sync::Arc;
 
-use muzanci_interpreter::{Step, StepId};
-use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, ExitStatus, Message, ProcessOutput, TaskId,
-    WorkerMessage,
-};
-use tokio::{join, sync::mpsc};
+use muzanci_interpreter::Step;
+use muzanci_interpreter::StepId;
+use muzanci_transport::channel::ChannelReceiver;
+use muzanci_transport::channel::ChannelSender;
+use muzanci_transport::channel::ChannelType;
+use muzanci_transport::channel::ExitStatus;
+use muzanci_transport::channel::Message;
+use muzanci_transport::channel::ProcessOutput;
+use muzanci_transport::channel::TaskId;
+use muzanci_transport::channel::WorkerMessage;
+use tokio::join;
+use tokio::sync::mpsc;
 
-use crate::{RunnerState, sandbox::Sandbox};
+use crate::RunnerState;
+use crate::capacity::AssignmentCapacity;
+use crate::sandbox::Sandbox;
 
 pub struct WorkerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -29,6 +37,7 @@ pub struct Worker {
     channel_tx: ChannelSender,
     channel_rx: ChannelReceiver,
     task_id: TaskId,
+    capacity: AssignmentCapacity,
 }
 
 enum StepResult {
@@ -37,7 +46,11 @@ enum StepResult {
 }
 
 impl Worker {
-    pub fn spawn(runner_state: Arc<RunnerState>, task_id: TaskId) -> WorkerHandle {
+    pub fn spawn(
+        runner_state: Arc<RunnerState>,
+        task_id: TaskId,
+        capacity: AssignmentCapacity,
+    ) -> WorkerHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
             let (channel_tx, channel_rx) = runner_state
@@ -50,6 +63,7 @@ impl Worker {
                 channel_tx,
                 channel_rx,
                 task_id,
+                capacity,
             }
             .run()
             .await
@@ -273,6 +287,12 @@ impl Worker {
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.runner_state.assignment_capacity.restore(self.capacity);
     }
 }
 

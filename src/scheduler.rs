@@ -1,11 +1,19 @@
 use std::sync::Arc;
 
-use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, EvaluatorSchedulerMessage, Message, TaskId,
-    TriggerId, WaitingTask, WaitingTrigger, WorkerSchedulerMessage,
-};
+use muzanci_transport::channel::ChannelReceiver;
+use muzanci_transport::channel::ChannelSender;
+use muzanci_transport::channel::ChannelType;
+use muzanci_transport::channel::EvaluatorSchedulerMessage;
+use muzanci_transport::channel::Message;
+use muzanci_transport::channel::TaskId;
+use muzanci_transport::channel::TriggerId;
+use muzanci_transport::channel::WaitingTask;
+use muzanci_transport::channel::WaitingTrigger;
+use muzanci_transport::channel::WorkerSchedulerMessage;
 
-use crate::{RunnerState, evaluator::Evaluator, worker::Worker};
+use crate::RunnerState;
+use crate::evaluator::Evaluator;
+use crate::worker::Worker;
 
 pub struct EvaluatorSchedulerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -225,13 +233,13 @@ impl WorkerScheduler {
             for task in tasks {
                 let permit = self
                     .runner_state
-                    .evaluation_capacity
+                    .assignment_capacity
                     .reserve(task.capacity)
                     .await?;
                 match self.reserve_task(task.task_id).await {
                     Ok(_) => {
                         tracing::info!("Successfully reserved task {:?}", task);
-                        Worker::spawn(self.runner_state.clone(), task.task_id);
+                        Worker::spawn(self.runner_state.clone(), task.task_id, task.capacity);
                         permit.commit();
                     }
                     Err(e) => {

@@ -1,16 +1,20 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use muzanci_interpreter::{EvalContext, EvalResult, Interpreter, Step};
-use muzanci_transport::channel::{
-    ChannelReceiver, ChannelSender, ChannelType, EvaluatorMessage, ExitStatus, GitCloneUrl,
-    Message, ProcessOutput, TriggerId,
-};
+use muzanci_interpreter::Args;
+use muzanci_interpreter::EvalResult;
+use muzanci_transport::channel::ChannelReceiver;
+use muzanci_transport::channel::ChannelSender;
+use muzanci_transport::channel::ChannelType;
+use muzanci_transport::channel::EvaluatorMessage;
+use muzanci_transport::channel::ExitStatus;
+use muzanci_transport::channel::Message;
+use muzanci_transport::channel::ProcessOutput;
+use muzanci_transport::channel::TriggerId;
 use tokio::sync::mpsc;
 
-use crate::{RunnerState, sandbox::Sandbox};
+use crate::RunnerState;
+use crate::sandbox::Sandbox;
 
 const INTERPRETER_BIN_BYTES: &[u8] = include_bytes!("../embed/interpreter");
 
@@ -62,7 +66,7 @@ impl Evaluator {
         let cancellation_token = self.runner_state.cancellation_token.clone();
         tokio::select! {
             _ = cancellation_token.cancelled() => {
-                eprintln!("Evaluator received cancellation signal.");
+                tracing::info!("Evaluator received cancellation signal.");
                 Ok(())
             }
 
@@ -73,15 +77,15 @@ impl Evaluator {
     }
 
     async fn main(&mut self) -> anyhow::Result<()> {
-        let git_clone_url = self.start().await?;
+        let args = self.start().await?;
         let sandbox = self.runner_state.sandboxer.create()?;
-        match self.evaluate(sandbox, git_clone_url).await {
+        match self.evaluate(sandbox, args.clone()).await {
             Ok(eval_result) => self.complete(eval_result).await,
             Err(e) => self.fail(e.to_string()).await,
         }
     }
 
-    async fn start(&mut self) -> anyhow::Result<GitCloneUrl> {
+    async fn start(&mut self) -> anyhow::Result<Args> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::StartRequest {
                 runner_id: self.runner_state.runner_id,
@@ -104,7 +108,7 @@ impl Evaluator {
     async fn evaluate(
         &mut self,
         sandbox: Arc<dyn Sandbox>,
-        git_clone_url: GitCloneUrl,
+        args: Args,
     ) -> anyhow::Result<EvalResult> {
         let interpreter_path = PathBuf::from("./interpreter");
         sandbox
@@ -121,10 +125,14 @@ impl Evaluator {
                 output_rx,
             );
             let command = format!(
-                "./{} -o {} {}",
+                "./{} {}/muzan.py --clone-target-dir {} --clone-url {} --git-branch {} --git-commit {} --output-file ./{}",
                 interpreter_path.display(),
+                args.clone_target_dir.display(),
+                args.clone_target_dir.display(),
+                args.clone_url,
+                args.git_branch,
+                args.git_commit,
                 eval_result_path.display(),
-                git_clone_url
             );
             let secrets = vec![]; // TODO: Optionally add secrets for evaluator.
             let process_handle = sandbox.run(&command, secrets, output_tx);
