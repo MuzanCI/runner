@@ -20,6 +20,7 @@ pub mod logging;
 pub mod sandbox;
 pub mod scheduler;
 pub mod secret;
+pub mod signal_receiver;
 pub mod worker;
 
 #[derive(Clone)]
@@ -49,6 +50,10 @@ impl RunnerState {
             assignment_capacity,
             sandboxer,
         }
+    }
+
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
     }
 }
 

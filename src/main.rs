@@ -8,6 +8,7 @@ use muzanci_runner::sandbox::FakeSandboxer;
 use muzanci_runner::scheduler::EvaluatorScheduler;
 use muzanci_runner::scheduler::WorkerScheduler;
 use muzanci_runner::secret::SecretService;
+use muzanci_runner::signal_receiver::SignalReceiver;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -38,12 +39,14 @@ async fn main() {
 
     let evaluator_scheduler_handle = EvaluatorScheduler::spawn(runner_state.clone());
     let worker_scheduler_handle = WorkerScheduler::spawn(runner_state.clone());
+    let signal_receiver_handle = SignalReceiver::spawn(runner_state.clone());
     // let debugger_scheduler_handle = DebuggerScheduler::spawn(runner_state.clone());
 
     // TODO: Add cancellation token for graceful shutdown.
     let _ = tokio::join!(
         evaluator_scheduler_handle,
         worker_scheduler_handle,
+        signal_receiver_handle,
         // debugger_scheduler_handle
     );
 }
