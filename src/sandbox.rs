@@ -4,7 +4,7 @@ use std::process::ExitStatus;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use muzanci_interpreter::Secret;
+use muzanci_interpreter::SecretConfig;
 use muzanci_transport::channel::ProcessOutput;
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -55,7 +55,7 @@ where
     async fn run(
         &self,
         command: &str,
-        secrets: Vec<Secret>,
+        secrets: Vec<SecretConfig>,
         output_tx: mpsc::Sender<ProcessOutput>,
     ) -> anyhow::Result<ExitStatus>;
 
@@ -73,7 +73,7 @@ impl Sandbox for FakeSandbox {
     async fn run(
         &self,
         command: &str,
-        secrets: Vec<Secret>,
+        secrets: Vec<SecretConfig>,
         output_tx: mpsc::Sender<ProcessOutput>,
     ) -> anyhow::Result<ExitStatus> {
         let envs = {

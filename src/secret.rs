@@ -1,6 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use muzanci_interpreter::Secret;
+use muzanci_interpreter::SecretConfig;
 
 pub struct SecretService {
     secrets: Arc<HashMap<String, String>>,
@@ -13,7 +14,7 @@ impl SecretService {
         }
     }
 
-    pub async fn resolve(&self, secret: &Secret) -> anyhow::Result<String> {
+    pub async fn resolve(&self, secret: &SecretConfig) -> anyhow::Result<String> {
         self.secrets
             .get(&secret.key)
             .cloned()

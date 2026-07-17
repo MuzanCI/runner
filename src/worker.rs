@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use muzanci_interpreter::Step;
+use muzanci_interpreter::StepConfig;
 use muzanci_interpreter::StepId;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
@@ -105,7 +105,7 @@ impl Worker {
         self.complete().await
     }
 
-    async fn start(&mut self) -> anyhow::Result<Vec<Step>> {
+    async fn start(&mut self) -> anyhow::Result<Vec<StepConfig>> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::StartRequest {
                 runner_id: self.runner_state.runner_id,
@@ -128,7 +128,7 @@ impl Worker {
     async fn run_step(
         &mut self,
         sandbox: Arc<dyn Sandbox>,
-        step: Step,
+        step: StepConfig,
     ) -> anyhow::Result<StepResult> {
         let step_id = step.step_id;
         self.start_step(step_id).await?;

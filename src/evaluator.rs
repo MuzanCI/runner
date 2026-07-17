@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use muzanci_interpreter::Args;
-use muzanci_interpreter::EvalResult;
+use muzanci_interpreter::Config;
+use muzanci_interpreter::GitCloneShowArgs;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
@@ -85,7 +85,7 @@ impl Evaluator {
         }
     }
 
-    async fn start(&mut self) -> anyhow::Result<Args> {
+    async fn start(&mut self) -> anyhow::Result<GitCloneShowArgs> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::StartRequest {
                 runner_id: self.runner_state.runner_id,
@@ -108,15 +108,15 @@ impl Evaluator {
     async fn evaluate(
         &mut self,
         sandbox: Arc<dyn Sandbox>,
-        args: Args,
-    ) -> anyhow::Result<EvalResult> {
-        let interpreter_path = PathBuf::from("./interpreter");
+        args: GitCloneShowArgs,
+    ) -> anyhow::Result<Config> {
+        let exec_path = PathBuf::from("./interpreter");
         sandbox
-            .create_executable_file(&interpreter_path, INTERPRETER_BIN_BYTES)
+            .create_executable_file(&exec_path, INTERPRETER_BIN_BYTES)
             .await?;
 
         let eval_result_path = PathBuf::from("./muzanci.eval_result.json");
-        let exit_status = {
+        let process_result = {
             let (output_tx, output_rx) = mpsc::channel(1);
             let output_handle = EvaluatorProcessOutput::spawn(
                 self.runner_state.clone(),
@@ -124,24 +124,17 @@ impl Evaluator {
                 self.trigger_id,
                 output_rx,
             );
-            let command = format!(
-                "./{} {}/muzan.py --clone-target-dir {} --clone-url {} --git-branch {} --git-commit {} --output-file ./{}",
-                interpreter_path.display(),
-                args.clone_target_dir.display(),
-                args.clone_target_dir.display(),
-                args.clone_url,
-                args.git_branch,
-                args.git_commit,
-                eval_result_path.display(),
-            );
+            let args: String = args.into();
+            let command = format!("./{} {}", exec_path.display(), args);
             let secrets = vec![]; // TODO: Optionally add secrets for evaluator.
             let process_handle = sandbox.run(&command, secrets, output_tx);
             let (process_result, _output_result) = tokio::join!(process_handle, output_handle);
+            process_result
+        };
 
-            match process_result?.code() {
-                Some(code) => ExitStatus::Code(code),
-                None => ExitStatus::Signal,
-            }
+        let exit_status = match process_result?.code() {
+            Some(code) => ExitStatus::Code(code),
+            None => ExitStatus::Signal,
         };
 
         self.channel_tx
@@ -169,12 +162,12 @@ impl Evaluator {
         Ok(eval_result)
     }
 
-    async fn complete(&mut self, eval_result: EvalResult) -> anyhow::Result<()> {
+    async fn complete(&mut self, config: Config) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::CompleteRequest {
                 runner_id: self.runner_state.runner_id,
                 trigger_id: self.trigger_id,
-                eval_result,
+                config,
             }))
             .await?;
 
