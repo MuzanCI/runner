@@ -94,7 +94,11 @@ impl EvaluatorScheduler {
                 match self.reserve_trigger(trigger.trigger_id).await {
                     Ok(_) => {
                         tracing::info!("Successfully reserved trigger {:?}", trigger);
-                        Evaluator::spawn(self.runner_state.clone(), trigger.trigger_id);
+                        Evaluator::spawn(
+                            self.runner_state.clone(),
+                            trigger.trigger_id,
+                            trigger.capacity,
+                        );
                         permit.commit();
                     }
                     Err(e) => {

@@ -14,6 +14,7 @@ use muzanci_transport::channel::TriggerId;
 use tokio::sync::mpsc;
 
 use crate::RunnerState;
+use crate::capacity::EvaluationCapacity;
 use crate::sandbox::Sandbox;
 
 const INTERPRETER_BIN_BYTES: &[u8] = include_bytes!("../embed/interpreter");
@@ -38,10 +39,15 @@ pub struct Evaluator {
     channel_tx: ChannelSender,
     channel_rx: ChannelReceiver,
     trigger_id: TriggerId,
+    capacity: EvaluationCapacity,
 }
 
 impl Evaluator {
-    pub fn spawn(runner_state: Arc<RunnerState>, trigger_id: TriggerId) -> EvaluatorHandle {
+    pub fn spawn(
+        runner_state: Arc<RunnerState>,
+        trigger_id: TriggerId,
+        capacity: EvaluationCapacity,
+    ) -> EvaluatorHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
             let (channel_tx, channel_rx) = runner_state
@@ -54,6 +60,7 @@ impl Evaluator {
                 channel_tx,
                 channel_rx,
                 trigger_id,
+                capacity,
             }
             .run()
             .await
@@ -115,7 +122,7 @@ impl Evaluator {
             .create_executable_file(&exec_path, INTERPRETER_BIN_BYTES)
             .await?;
 
-        let eval_result_path = PathBuf::from("./muzanci.eval_result.json");
+        let config_path = PathBuf::from("./muzan.config.json");
         let process_result = {
             let (output_tx, output_rx) = mpsc::channel(1);
             let output_handle = EvaluatorProcessOutput::spawn(
@@ -125,7 +132,13 @@ impl Evaluator {
                 output_rx,
             );
             let args: String = args.into();
-            let command = format!("./{} {}", exec_path.display(), args);
+            let command = format!(
+                "{} {} > {}",
+                exec_path.display(),
+                args,
+                config_path.display()
+            );
+            tracing::error!("Running command: [{}]", command);
             let secrets = vec![]; // TODO: Optionally add secrets for evaluator.
             let process_handle = sandbox.run(&command, secrets, output_tx);
             let (process_result, _output_result) = tokio::join!(process_handle, output_handle);
@@ -157,9 +170,9 @@ impl Evaluator {
             }
         }
 
-        let eval_result_json = sandbox.read_file(&eval_result_path).await?;
-        let eval_result = serde_json::from_str(&eval_result_json)?;
-        Ok(eval_result)
+        let config_json = sandbox.read_file(&config_path).await?;
+        let config = serde_json::from_str(&config_json)?;
+        Ok(config)
     }
 
     async fn complete(&mut self, config: Config) -> anyhow::Result<()> {
@@ -202,6 +215,12 @@ impl Evaluator {
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
+    }
+}
+
+impl Drop for Evaluator {
+    fn drop(&mut self) {
+        self.runner_state.evaluation_capacity.restore(self.capacity);
     }
 }
 
