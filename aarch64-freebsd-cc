@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Loop through all arguments passed by cc-rs and fix the target triple for Zig
+args=()
+for arg in "$@"; do
+    if [ "$arg" = "--target=aarch64-unknown-freebsd" ]; then
+        args+=("--target=aarch64-freebsd")
+    else
+        args+=("$arg")
+    fi
+done
+
+# Execute zig cc with the corrected arguments
+exec zig cc "${args[@]}"

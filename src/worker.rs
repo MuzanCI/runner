@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use muzanci_interpreter::StepConfig;
@@ -15,7 +16,10 @@ use tokio::sync::mpsc;
 
 use crate::RunnerState;
 use crate::capacity::AssignmentCapacity;
+use crate::image::manifest_ref::ManifestRef;
 use crate::sandbox::Sandbox;
+use crate::sandbox::SandboxConfig;
+use crate::sandbox::SandboxId;
 
 pub struct WorkerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -38,6 +42,7 @@ pub struct Worker {
     channel_rx: ChannelReceiver,
     task_id: TaskId,
     capacity: AssignmentCapacity,
+    manifest_ref: ManifestRef,
 }
 
 enum StepResult {
@@ -50,6 +55,7 @@ impl Worker {
         runner_state: Arc<RunnerState>,
         task_id: TaskId,
         capacity: AssignmentCapacity,
+        manifest_ref: ManifestRef,
     ) -> WorkerHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
@@ -64,6 +70,7 @@ impl Worker {
                 channel_rx,
                 task_id,
                 capacity,
+                manifest_ref,
             }
             .run()
             .await
@@ -88,7 +95,14 @@ impl Worker {
 
     async fn main(&mut self) -> anyhow::Result<()> {
         let steps = self.start().await?;
-        let sandbox = self.runner_state.sandboxer.create()?;
+        let config = SandboxConfig {
+            sandbox_id: SandboxId::now_v7(),
+            manifest_ref: self.manifest_ref.clone(),
+        };
+        let sandbox: Arc<dyn Sandbox> = {
+            let sandbox = self.runner_state.sandboxer.create(config).await?;
+            Arc::from(sandbox)
+        };
         for step in steps {
             match self.run_step(sandbox.clone(), step).await? {
                 StepResult::Continue => {
@@ -133,6 +147,16 @@ impl Worker {
         let step_id = step.step_id;
         self.start_step(step_id).await?;
 
+        // TODO: Resolve step.secrets to hashmap
+        let envs = {
+            let mut envs = HashMap::new();
+            for secret in &step.secrets {
+                let value = self.runner_state.secret_service.resolve(&secret).await?;
+                envs.insert(secret.name.clone(), value);
+            }
+            envs
+        };
+
         let exit_status = {
             let (output_tx, output_rx) = mpsc::channel(1);
             let output_handle = WorkerStepOutput::spawn(
@@ -142,7 +166,7 @@ impl Worker {
                 step_id,
                 output_rx,
             );
-            let process_handle = sandbox.run(&step.command, step.secrets.clone(), output_tx);
+            let process_handle = sandbox.run(&step.command, envs, output_tx);
             let (process_result, _output_result) = join!(process_handle, output_handle);
 
             match process_result?.code() {

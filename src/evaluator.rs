@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use muzanci_interpreter::Config;
@@ -15,7 +17,10 @@ use tokio::sync::mpsc;
 
 use crate::RunnerState;
 use crate::capacity::EvaluationCapacity;
+use crate::image::manifest_ref::ManifestRef;
 use crate::sandbox::Sandbox;
+use crate::sandbox::SandboxConfig;
+use crate::sandbox::SandboxId;
 
 const INTERPRETER_BIN_BYTES: &[u8] = include_bytes!("../embed/interpreter");
 
@@ -85,8 +90,12 @@ impl Evaluator {
 
     async fn main(&mut self) -> anyhow::Result<()> {
         let args = self.start().await?;
-        let sandbox = self.runner_state.sandboxer.create()?;
-        match self.evaluate(sandbox, args.clone()).await {
+        let config = SandboxConfig {
+            sandbox_id: SandboxId::now_v7(),
+            manifest_ref: ManifestRef::try_from("alpine:latest")?,
+        };
+        let sandbox = self.runner_state.sandboxer.create(config).await?;
+        match self.evaluate(sandbox.into(), args.clone()).await {
             Ok(eval_result) => self.complete(eval_result).await,
             Err(e) => self.fail(e.to_string()).await,
         }
@@ -119,7 +128,7 @@ impl Evaluator {
     ) -> anyhow::Result<Config> {
         let exec_path = PathBuf::from("./interpreter");
         sandbox
-            .create_executable_file(&exec_path, INTERPRETER_BIN_BYTES)
+            .create_executable_file(&exec_path, INTERPRETER_BIN_BYTES.into())
             .await?;
 
         let config_path = PathBuf::from("./muzan.config.json");
@@ -139,7 +148,7 @@ impl Evaluator {
                 config_path.display()
             );
             tracing::error!("Running command: [{}]", command);
-            let secrets = vec![]; // TODO: Optionally add secrets for evaluator.
+            let secrets = HashMap::new(); // TODO: Optionally add secrets for evaluator.
             let process_handle = sandbox.run(&command, secrets, output_tx);
             let (process_result, _output_result) = tokio::join!(process_handle, output_handle);
             process_result

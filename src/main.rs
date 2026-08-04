@@ -1,10 +1,14 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use muzanci_runner::RunnerState;
 use muzanci_runner::capacity::SharedAssignmentCapacity;
 use muzanci_runner::capacity::SharedEvaluationCapacity;
-use muzanci_runner::sandbox::FakeSandboxer;
+use muzanci_runner::image::reqwest_registry_client::ReqwestRegistryClient;
+use muzanci_runner::image::zfs_image_store::ZfsImageStore;
+use muzanci_runner::image::zfs_image_store::ZfsPool;
+use muzanci_runner::sandbox::jail_sandboxer::JailSandboxer;
 use muzanci_runner::scheduler::EvaluatorScheduler;
 use muzanci_runner::scheduler::WorkerScheduler;
 use muzanci_runner::secret::SecretService;
@@ -25,8 +29,17 @@ async fn main() {
     let evaluation_capacity = SharedEvaluationCapacity::new(10);
     let assignment_capacity = SharedAssignmentCapacity::new(10);
 
-    let secrets_service = Arc::new(SecretService::new(HashMap::new()));
-    let sandboxer = Arc::new(FakeSandboxer::new(secrets_service));
+    let zfs_pool = ZfsPool::new("zroot");
+    let secret_service = Arc::new(SecretService::new(HashMap::new()));
+    let registry_client = Arc::new(ReqwestRegistryClient::new());
+    let root_dir = PathBuf::from("/tmp/runner");
+    let image_store =
+        Arc::new(ZfsImageStore::try_new(&root_dir, zfs_pool, registry_client).unwrap());
+
+    let bridge_if = "bridge0".to_string();
+    let num_slots = 10;
+    let sandboxer =
+        Arc::new(JailSandboxer::try_new(&root_dir, bridge_if, image_store, num_slots).unwrap());
 
     let runner_state = Arc::new(RunnerState::new(
         cancellation_token,
@@ -35,6 +48,7 @@ async fn main() {
         evaluation_capacity,
         assignment_capacity,
         sandboxer,
+        secret_service,
     ));
 
     let evaluator_scheduler_handle = EvaluatorScheduler::spawn(runner_state.clone());

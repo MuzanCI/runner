@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use http::Request;
+use tokio_util::sync::CancellationToken;
 
 use muzanci_transport::MUZANCI_RUNNER_ID_HEADER;
 use muzanci_transport::MUZANCI_TRANSPORT_V1;
@@ -8,14 +9,15 @@ use muzanci_transport::channel::FnChannelAcceptor;
 use muzanci_transport::channel::RunnerId;
 use muzanci_transport::mux::Mux;
 use muzanci_transport::mux::MuxHandle;
-use tokio_util::sync::CancellationToken;
 
 use crate::capacity::SharedAssignmentCapacity;
 use crate::capacity::SharedEvaluationCapacity;
 use crate::sandbox::Sandboxer;
+use crate::secret::SecretService;
 
 pub mod capacity;
 pub mod evaluator;
+pub mod image;
 pub mod logging;
 pub mod sandbox;
 pub mod scheduler;
@@ -31,6 +33,7 @@ pub struct RunnerState {
     evaluation_capacity: SharedEvaluationCapacity,
     assignment_capacity: SharedAssignmentCapacity,
     sandboxer: Arc<dyn Sandboxer>,
+    secret_service: Arc<SecretService>,
 }
 
 impl RunnerState {
@@ -41,6 +44,7 @@ impl RunnerState {
         evaluation_capacity: SharedEvaluationCapacity,
         assignment_capacity: SharedAssignmentCapacity,
         sandboxer: Arc<dyn Sandboxer>,
+        secret_service: Arc<SecretService>,
     ) -> Self {
         Self {
             cancellation_token,
@@ -49,6 +53,7 @@ impl RunnerState {
             evaluation_capacity,
             assignment_capacity,
             sandboxer,
+            secret_service,
         }
     }
 

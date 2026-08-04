@@ -4,13 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+aws-lc-rs = { version = "1", features = ["bindgen"] }
 http = "1.4.2"
 hyper = { version = "1.10.1", features = ["client", "http1"] }
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["io-util", "net", "fs", "rt-multi-thread", "process", "signal"] }
 muzanci-transport = { path = "../muzanci-transport" }
 muzanci-interpreter = { path = "../muzanci-interpreter" }
-rustls = { version = "0.23.40", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23.40"}
 tokio-rustls = "0.26.4"
 anyhow = "1.0.102"
 hyper-util = { version = "0.1.20", features = ["tokio"] }
@@ -18,7 +19,7 @@ http-body-util = "0.1.3"
 bytes = "1.11.1"
 futures = "0.3.32"
 uuid = { version = "1.23.3", features = ["v7"] }
-russh = "0.61.2"
+russh = { version = "0.61.2"}
 russh-keys = "0.49.2"
 nix = { version = "0.31.3", features = ["term"] }
 rand = "0.10.1"
@@ -31,6 +32,16 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-appender = "0.2.5"
 tracing-error = "0.2.1"
 serde_json = "1.0.150"
+sha2 = "0.11.0"
+hex = "0.4.3"
+url = "2.5.8"
+regex = "1.13.1"
+reqwest = { version = "0.13.4", features = ["json", "stream"] }
+async-fd-lock = "0.2.0"
+async-compression = { version = "0.4.43", features = ["gzip", "tokio"] }
+tokio-stream = "0.1.19"
+tokio-tar = "0.3.1"
+futures-util = "0.3.33"
 
 [lib]
 name = "muzanci_runner"

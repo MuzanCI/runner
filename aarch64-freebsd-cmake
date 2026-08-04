@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# CMake on a macOS host auto-populates CMAKE_OSX_ARCHITECTURES (e.g. "arm64")
+# even when cross-compiling to a non-Apple CMAKE_SYSTEM_NAME (here: FreeBSD).
+# Its Unix Makefiles generator then unconditionally appends
+# "-arch <arch> -isysroot <macOS SDK>" to every compile command, which zig cc
+# rejects ("unsupported option '-arch'"). Force it empty during the initial
+# configure step only (not during --build/--install invocations).
+
+# macOS CMake injects '-arch' options which is not supported by zig cc.
+# Set CMAKE_OSX_ARCHITECTURES to empty during the initial configure step only.
+args=("$@")
+is_configure=1
+for arg in "$@"; do
+    if [ "$arg" = "--build" ] || [ "$arg" = "--install" ]; then
+        is_configure=0
+        break
+    fi
+done
+
+if [ "$is_configure" = "1" ]; then
+    args+=("-DCMAKE_OSX_ARCHITECTURES=")
+fi
+
+exec cmake "${args[@]}"
