@@ -12,10 +12,10 @@ use muzanci_runner::sandbox::Sandboxer;
 use muzanci_runner::sandbox::jail_sandboxer::JailSandboxer;
 
 #[test]
-fn integration_test() -> anyhow::Result<()> {
+fn sandbox_integration_test() -> anyhow::Result<()> {
     tokio::runtime::Runtime::new()?.block_on(async {
         let root_dir = PathBuf::from(format!(
-            "/tmp/muzanci_sandbox/integration_test/{}",
+            "/tmp/muzanci_runner/sandbox_integration_test/{}",
             Uuid::now_v7(),
         ));
         std::fs::create_dir_all(&root_dir)?;
@@ -33,12 +33,16 @@ fn integration_test() -> anyhow::Result<()> {
 
         let sandboxer = JailSandboxer::try_new(&root_dir, bridge_if, image_store, num_slots)?;
 
+        eprintln!("Created jail sandboxer");
+
         let sandbox_config = SandboxConfig {
             sandbox_id: Uuid::now_v7(),
-            manifest_ref: ManifestRef::try_from("alpine:latest")?,
+            manifest_ref: ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")?,
         };
 
         sandboxer.create(sandbox_config).await?;
+
+        eprintln!("created sandbox");
 
         Ok(())
     })

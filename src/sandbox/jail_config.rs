@@ -113,10 +113,13 @@ impl ToString for JailConfig {
         s.push_str("allow.setaudit = 0;\n");
 
         // Exec psudo-parameters
+        s.push_str("exec.clean;\n");
+
         s.push_str(&format!(
             "exec.consolelog = \"{}\";\n",
             self.exec_console_log.display()
         ));
+
         s.push_str("exec.prepare = \"echo exec.prepare\";\n");
         for exec in &self.exec_prepare {
             s.push_str(&format!("exec.prepare += \"{}\";\n", exec))
@@ -132,12 +135,12 @@ impl ToString for JailConfig {
             s.push_str(&format!("exec.created += \"{}\";\n", exec))
         }
 
-        s.push_str("exec.start = \"echo exec.start\";\n");
+        s.push_str("exec.start = \"/bin/echo exec.start\";\n");
         for exec in &self.exec_start {
             s.push_str(&format!("exec.start += \"{}\";\n", exec))
         }
 
-        s.push_str("exec.stop = \"echo exec.stop\";\n");
+        s.push_str("exec.stop = \"/bin/echo exec.stop\";\n");
         for exec in &self.exec_stop {
             s.push_str(&format!("exec.stop += \"{}\";\n", exec))
         }

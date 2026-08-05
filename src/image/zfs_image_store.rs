@@ -327,7 +327,12 @@ impl ZfsImageStore {
 
             for blob_ref in blob_refs {
                 let image_store = self.clone();
-                join_set.spawn(async move { image_store.pull_remote_blob(blob_ref).await });
+                join_set.spawn(async move {
+                    match image_store.get_local_blob(&blob_ref.digest).await? {
+                        None => image_store.pull_remote_blob(blob_ref).await,
+                        Some(_) => Ok(()),
+                    }
+                });
             }
 
             while let Some(result) = join_set.join_next().await {
@@ -707,6 +712,7 @@ impl ZfsImageStore {
             let raw_entry_path = entry
                 .path()
                 .map_err(|e| ZfsImageStoreError(e.to_string()))?;
+
             let entry_path = sanitize_and_validate_path(&raw_entry_path)
                 .map_err(|e| ZfsImageStoreError(e.to_string()))?;
 
@@ -715,9 +721,7 @@ impl ZfsImageStore {
                 continue;
             }
 
-            let working_path = dataset.mountpoint.join(&entry_path);
-
-            let file_name = match working_path.file_name().and_then(|s| s.to_str()) {
+            let file_name = match entry_path.file_name().and_then(|s| s.to_str()) {
                 Some(name) => name,
                 // Skip file names ending with ".."
                 None => continue,
@@ -725,16 +729,16 @@ impl ZfsImageStore {
 
             if file_name == ".wh..wh..opq" {
                 // Remove all contents of parent directory.
-                if let Some(parent_dir) = working_path.parent() {
-                    std::fs::remove_dir_all(&parent_dir)
+                if let Some(entry_parent_dir) = entry_path.parent() {
+                    std::fs::remove_dir_all(&entry_parent_dir)
                         .map_err(|e| ZfsImageStoreError(e.to_string()))?;
                 }
                 continue;
             }
 
             if let Some(whiteout_file_name) = file_name.strip_prefix(".wh.") {
-                if let Some(parent_dir) = working_path.parent() {
-                    let whiteout_path = parent_dir.join(whiteout_file_name);
+                if let Some(entry_parent_dir) = entry_path.parent() {
+                    let whiteout_path = entry_parent_dir.join(whiteout_file_name);
                     std::fs::remove_file(&whiteout_path)
                         .map_err(|e| ZfsImageStoreError(e.to_string()))?;
                 }
@@ -742,7 +746,7 @@ impl ZfsImageStore {
             }
 
             entry
-                .unpack_in(&working_path)
+                .unpack_in(&dataset.mountpoint)
                 .await
                 .map_err(|e| ZfsImageStoreError(e.to_string()))?;
         }

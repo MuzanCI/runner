@@ -19,7 +19,6 @@ use crate::sandbox::jail_config::JailConfig;
 use crate::sandbox::jail_sandbox::JailSandbox;
 use crate::sandbox::jail_slot::FreeJailSlots;
 use crate::sandbox::jail_slot::JailSlotId;
-use crate::secret::SecretService;
 
 pub type ZfsDatasetQuotaGigabyte = usize;
 
@@ -83,17 +82,22 @@ impl JailSandboxer {
         sandbox_id: SandboxId,
         slot_id: JailSlotId,
         zfs_snapshot: ZfsSnapshot,
+        sandbox_dir: PathBuf,
         zfs_quota: ZfsDatasetQuotaGigabyte,
     ) -> Result<JailConfig, SandboxerError> {
         let zfs_dataset = format!(
-            "{}/sandbox_rootfs/{sandbox_id}",
+            "{}/sandbox_rootfs-{sandbox_id}",
             self.image_store.zfs_pool(),
         );
-        let jail_conf = self.jail_config(sandbox_id, slot_id, zfs_dataset, zfs_snapshot, zfs_quota);
-        let jail_conf_path = self
-            .sandbox_dir
-            .join(sandbox_id.to_string())
-            .join("jail.conf");
+        let jail_conf = self.jail_config(
+            sandbox_id,
+            &sandbox_dir,
+            slot_id,
+            zfs_dataset,
+            zfs_snapshot,
+            zfs_quota,
+        );
+        let jail_conf_path = sandbox_dir.join("jail.conf");
 
         // Create jail configuration file.
         {
@@ -129,13 +133,14 @@ impl JailSandboxer {
     fn jail_config(
         &self,
         sandbox_id: SandboxId,
+        sandbox_dir: &Path,
         slot_id: JailSlotId,
         zfs_dataset: String,
         zfs_snapshot: ZfsSnapshot,
         zfs_quota: ZfsDatasetQuotaGigabyte,
     ) -> JailConfig {
         let name = format!("sandbox-{}", sandbox_id.to_string());
-        let path = self.sandbox_dir.join(sandbox_id.to_string()).join("root");
+        let path = sandbox_dir.join("root");
         let hostname = format!("sandbox-${sandbox_id}.local");
         let epair_interface = format!("epair{slot_id}");
         let epair_host_interface = format!("epair{slot_id}a");
@@ -147,10 +152,7 @@ impl JailSandboxer {
         // Bridge IP=11.0.0.1
         let ip_addr = Ipv4Addr::new(11, 0, 1, slot_id as u8);
 
-        let exec_console_log = self
-            .sandbox_dir
-            .join(sandbox_id.to_string())
-            .join("exec_console_log.txt");
+        let exec_console_log = sandbox_dir.join("exec_console_log.txt");
 
         let exec_prepare = vec![
             format!(
@@ -177,7 +179,7 @@ impl JailSandboxer {
             format!("/sbin/ifconfig lo0 127.0.0.1 up"),
             // Acquire IP address for vmnet interface
             format!(
-                "ifconfig {epair_jail_interface} inet {ip_addr} netmask 255.255.0.0 broadcast 11.0.255.255 up"
+                "/sbin/ifconfig {epair_jail_interface} inet {ip_addr} netmask 255.255.0.0 broadcast 11.0.255.255 up"
             ),
             // Start base services
             format!("/bin/sh /etc/rc"),
@@ -227,17 +229,33 @@ impl Sandboxer for JailSandboxer {
             .reserve()
             .map_err(|e| SandboxerError(e.to_string()))?;
 
+        eprintln!("reserved slot");
         let snapshot = self
             .image_store
             .snapshot(&config.manifest_ref)
             .await
             .map_err(|e| SandboxerError(e.to_string()))?;
 
+        eprintln!("snapshot created");
+
+        let sandbox_dir = self.sandbox_dir.join(&config.sandbox_id.to_string());
+        std::fs::create_dir_all(&sandbox_dir).map_err(|e| SandboxerError(e.to_string()))?;
+
         let zfs_quota = 10;
 
-        let jail_conf = self.create_jail(config.sandbox_id, slot.slot_id(), snapshot, zfs_quota)?;
+        let jail_conf = self.create_jail(
+            config.sandbox_id,
+            slot.slot_id(),
+            snapshot,
+            sandbox_dir,
+            zfs_quota,
+        )?;
+
+        eprintln!("jail created");
 
         let sandbox = JailSandbox::new(jail_conf, slot);
+
+        eprintln!("sandbox created");
 
         Ok(Arc::new(sandbox))
     }

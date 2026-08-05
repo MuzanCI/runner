@@ -12,7 +12,7 @@ fn integration_test() -> anyhow::Result<()> {
     tokio::runtime::Runtime::new()?.block_on(async {
         // Setup test environment.
         let root_dir = PathBuf::from(format!(
-            "/tmp/muzanci_image/integration_test/{}",
+            "/tmp/muzanci_runner/rootfs_integration_test/{}",
             Uuid::now_v7()
         ));
         std::fs::create_dir_all(&root_dir)?;
@@ -24,7 +24,7 @@ fn integration_test() -> anyhow::Result<()> {
             ZfsImageStore::try_new(&root_dir, pool, registry_client)?
         };
         // Build snapshot from manifest ref.
-        let manifest_ref = ManifestRef::try_from("alpine:latest")?;
+        let manifest_ref = ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")?;
         let _snapshot = image_store.snapshot(&manifest_ref).await?;
         Ok(())
     })

@@ -93,7 +93,7 @@ impl RegistryClient for ReqwestRegistryClient {
                         ))
                     })?
                     .into_iter()
-                    .find(|d| d.platform.architecture == "arm64" && d.platform.os == "linux")
+                    .find(|d| d.platform.architecture == "arm64" && d.platform.os == "freebsd")
                     .ok_or_else(|| {
                         RegistryClientError(format!(
                             "No manifest found for platform 'linux/arm64' in image index from '{}'",
