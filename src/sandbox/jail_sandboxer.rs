@@ -6,13 +6,14 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
+use crate::image::image::ImagePlatform;
+use crate::image::manifest_ref::ManifestRef;
 use crate::image::zfs_image_store::ZfsImageStore;
 use crate::image::zfs_image_store::ZfsSnapshot;
 
 use crate::sandbox::NetworkInterface;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
-use crate::sandbox::SandboxId;
 use crate::sandbox::Sandboxer;
 use crate::sandbox::SandboxerError;
 use crate::sandbox::jail_config::JailConfig;
@@ -79,18 +80,19 @@ impl JailSandboxer {
 
     fn create_jail(
         &self,
-        sandbox_id: SandboxId,
+        sandbox_config: &SandboxConfig,
         slot_id: JailSlotId,
         zfs_snapshot: ZfsSnapshot,
         sandbox_dir: PathBuf,
         zfs_quota: ZfsDatasetQuotaGigabyte,
     ) -> Result<JailConfig, SandboxerError> {
         let zfs_dataset = format!(
-            "{}/sandbox_rootfs-{sandbox_id}",
+            "{}/sandbox_rootfs-{}",
             self.image_store.zfs_pool(),
+            sandbox_config.sandbox_id,
         );
         let jail_conf = self.jail_config(
-            sandbox_id,
+            sandbox_config,
             &sandbox_dir,
             slot_id,
             zfs_dataset,
@@ -132,14 +134,15 @@ impl JailSandboxer {
 
     fn jail_config(
         &self,
-        sandbox_id: SandboxId,
+        sandbox_config: &SandboxConfig,
         sandbox_dir: &Path,
         slot_id: JailSlotId,
         zfs_dataset: String,
         zfs_snapshot: ZfsSnapshot,
         zfs_quota: ZfsDatasetQuotaGigabyte,
     ) -> JailConfig {
-        let name = format!("sandbox-{}", sandbox_id.to_string());
+        let sandbox_id = sandbox_config.sandbox_id.to_string();
+        let name = format!("sandbox-{sandbox_id}");
         let path = sandbox_dir.join("root");
         let hostname = format!("sandbox-{sandbox_id}.local");
         let epair_interface = format!("epair{slot_id}");
@@ -206,6 +209,7 @@ impl JailSandboxer {
         ];
 
         JailConfig::new(
+            sandbox_config.platform.os.clone(),
             name,
             slot_id,
             path,
@@ -233,22 +237,32 @@ impl Sandboxer for JailSandboxer {
 
         let snapshot = self
             .image_store
-            .snapshot(&config.manifest_ref)
+            .snapshot(&config.manifest_ref, &config.platform)
             .await
             .map_err(|e| SandboxerError(e.to_string()))?;
+
+        if config.platform.os == "linux" {
+            // Linux images must be run on a FreeBSD image.
+            let freebsd_manifest_ref = ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")
+                .map_err(|e| SandboxerError(e.to_string()))?;
+            let freebsd_platform = ImagePlatform {
+                os: "freebsd".to_string(),
+                architecture: config.platform.architecture.clone(),
+            };
+            let _freebsd_snapshot = self
+                .image_store
+                .snapshot(&freebsd_manifest_ref, &freebsd_platform)
+                .await
+                .map_err(|e| SandboxerError(e.to_string()))?;
+        }
 
         let sandbox_dir = self.sandbox_dir.join(&config.sandbox_id.to_string());
         std::fs::create_dir_all(&sandbox_dir).map_err(|e| SandboxerError(e.to_string()))?;
 
         let zfs_quota = 10;
 
-        let jail_conf = self.create_jail(
-            config.sandbox_id,
-            slot.slot_id(),
-            snapshot,
-            sandbox_dir,
-            zfs_quota,
-        )?;
+        let jail_conf =
+            self.create_jail(&config, slot.slot_id(), snapshot, sandbox_dir, zfs_quota)?;
 
         let sandbox = JailSandbox::new(config, jail_conf, slot);
 

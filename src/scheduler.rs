@@ -13,6 +13,7 @@ use muzanci_transport::channel::WorkerSchedulerMessage;
 
 use crate::RunnerState;
 use crate::evaluator::Evaluator;
+use crate::image::image::ImagePlatform;
 use crate::image::manifest_ref::ManifestRef;
 use crate::worker::Worker;
 
@@ -245,12 +246,18 @@ impl WorkerScheduler {
                     Ok(_) => {
                         tracing::info!("Successfully reserved task {:?}", task);
                         // TODO: Add image field to job config.
-                        let manifest_ref = ManifestRef::try_from("alpine:latest")?;
+                        let manifest_ref =
+                            ManifestRef::try_from("freebsd/freebsd-toolchain:latest")?;
+                        let platform = ImagePlatform {
+                            os: "freebsd".to_string(),
+                            architecture: "arm64".to_string(),
+                        };
                         Worker::spawn(
                             self.runner_state.clone(),
                             task.task_id,
                             task.capacity,
                             manifest_ref,
+                            platform,
                         );
                         permit.commit();
                     }

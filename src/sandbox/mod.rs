@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 use muzanci_transport::channel::ProcessOutput;
 
+use crate::image::image::ImagePlatform;
 use crate::image::manifest_ref::ManifestRef;
 
 pub mod jail_config;
@@ -24,6 +25,7 @@ pub struct SandboxError(pub String);
 pub struct SandboxConfig {
     pub sandbox_id: SandboxId,
     pub manifest_ref: ManifestRef,
+    pub platform: ImagePlatform,
 }
 
 #[async_trait::async_trait]

@@ -1,5 +1,6 @@
 use crate::image::blob_ref::BlobRef;
 use crate::image::image::ImageManifest;
+use crate::image::image::ImagePlatform;
 use crate::image::manifest_ref::ManifestRef;
 
 #[derive(Debug, thiserror::Error)]
@@ -14,6 +15,7 @@ where
     async fn resolve_image_manifest(
         &self,
         manifest_ref: &ManifestRef,
+        platform: &ImagePlatform,
     ) -> Result<ImageManifest, RegistryClientError>;
     async fn blob_reader(
         &self,

@@ -3,6 +3,7 @@ use futures::TryStreamExt;
 use crate::image::blob_ref::BlobRef;
 use crate::image::image::ImageIndex;
 use crate::image::image::ImageManifest;
+use crate::image::image::ImagePlatform;
 use crate::image::image::MediaType;
 use crate::image::manifest_ref::ManifestRef;
 use crate::image::registry_client::RegistryClient;
@@ -22,6 +23,7 @@ impl RegistryClient for ReqwestRegistryClient {
     async fn resolve_image_manifest(
         &self,
         manifest_ref: &ManifestRef,
+        platform: &ImagePlatform,
     ) -> Result<ImageManifest, RegistryClientError> {
         tracing::info!("Resolving image manifest for '{:?}'", manifest_ref);
         let auth_token = self.auth_token(&manifest_ref.namespace).await?;
@@ -93,11 +95,14 @@ impl RegistryClient for ReqwestRegistryClient {
                         ))
                     })?
                     .into_iter()
-                    .find(|d| d.platform.architecture == "arm64" && d.platform.os == "freebsd")
+                    .find(|d| {
+                        d.platform.architecture == platform.architecture
+                            && d.platform.os == platform.os
+                    })
                     .ok_or_else(|| {
                         RegistryClientError(format!(
-                            "No manifest found for platform 'linux/arm64' in image index from '{}'",
-                            url
+                            "No manifest found for platform '{}/{}' in image index from '{}'",
+                            platform.os, platform.architecture, url
                         ))
                     })?;
 
@@ -116,7 +121,7 @@ impl RegistryClient for ReqwestRegistryClient {
                     digest: Some(digest),
                     tag: None,
                 };
-                self.resolve_image_manifest(&manifest_ref).await
+                self.resolve_image_manifest(&manifest_ref, platform).await
             }
             MediaType::OciImageManifestV1Json => {
                 tracing::info!("Received image manifest for '{}'", url);

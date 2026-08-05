@@ -6,6 +6,7 @@ use crate::sandbox::NetworkInterface;
 pub type Execs = Vec<String>;
 
 pub struct JailConfig {
+    platform_os: String,
     name: String,
     jid: usize,
     path: PathBuf,
@@ -23,6 +24,7 @@ pub struct JailConfig {
 
 impl JailConfig {
     pub fn new(
+        platform_os: String,
         name: String,
         jid: usize,
         path: PathBuf,
@@ -38,6 +40,7 @@ impl JailConfig {
         exec_release: Execs,
     ) -> Self {
         Self {
+            platform_os,
             name,
             jid,
             path,
@@ -86,6 +89,7 @@ impl ToString for JailConfig {
 
         // DevFS
         s.push_str("mount.devfs;\n");
+        s.push_str("mount.fdescfs;\n");
         s.push_str("devfs_ruleset = 100;\n");
 
         // Permissions
@@ -111,6 +115,21 @@ impl ToString for JailConfig {
         s.push_str("allow.settime = 0;\n");
         s.push_str("allow.routing = 0;\n");
         s.push_str("allow.setaudit = 0;\n");
+
+        if self.platform_os == "linux" {
+            s.push_str("linux = new;\n");
+            s.push_str("mount.linprocfs;\n");
+            s.push_str("mount.linsysfs;\n");
+            s.push_str("mount += \"devfs     $path/compat/linux/dev     devfs     rw  0 0\";\n");
+            s.push_str("mount += \"tmpfs     $path/compat/linux/dev/shm tmpfs     rw,size=1g,mode=1777  0 0\";\n");
+            s.push_str(
+                "mount += \"fdescfs   $path/compat/linux/dev/fd  fdescfs   rw,linrdlnk 0 0\";\n",
+            );
+            s.push_str("mount += \"linprocfs $path/compat/linux/proc    linprocfs rw  0 0\";\n");
+            s.push_str("mount += \"linsysfs  $path/compat/linux/sys     linsysfs  rw  0 0\";\n");
+            s.push_str("mount += \"/tmp      $path/compat/linux/tmp     nullfs    rw  0 0\";\n");
+            s.push_str("mount += \"/home     $path/compat/linux/home    nullfs    rw  0 0\";\n");
+        }
 
         // Exec psudo-parameters
         s.push_str("exec.clean;\n");

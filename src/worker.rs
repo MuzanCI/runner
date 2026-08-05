@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 
 use crate::RunnerState;
 use crate::capacity::AssignmentCapacity;
+use crate::image::image::ImagePlatform;
 use crate::image::manifest_ref::ManifestRef;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
@@ -43,6 +44,7 @@ pub struct Worker {
     task_id: TaskId,
     capacity: AssignmentCapacity,
     manifest_ref: ManifestRef,
+    platform: ImagePlatform,
 }
 
 enum StepResult {
@@ -56,6 +58,7 @@ impl Worker {
         task_id: TaskId,
         capacity: AssignmentCapacity,
         manifest_ref: ManifestRef,
+        platform: ImagePlatform,
     ) -> WorkerHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
@@ -71,6 +74,7 @@ impl Worker {
                 task_id,
                 capacity,
                 manifest_ref,
+                platform,
             }
             .run()
             .await
@@ -98,6 +102,7 @@ impl Worker {
         let config = SandboxConfig {
             sandbox_id: SandboxId::now_v7(),
             manifest_ref: self.manifest_ref.clone(),
+            platform: self.platform.clone(),
         };
         let sandbox: Arc<dyn Sandbox> = {
             let sandbox = self.runner_state.sandboxer.create(config).await?;

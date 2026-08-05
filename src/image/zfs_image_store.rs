@@ -22,6 +22,7 @@ use crate::image::digest::Digest;
 use crate::image::image::Descriptor;
 use crate::image::image::ImageConfig;
 use crate::image::image::ImageManifest;
+use crate::image::image::ImagePlatform;
 use crate::image::image::MediaType;
 use crate::image::manifest_ref::ManifestRef;
 use crate::image::registry_client::RegistryClient;
@@ -241,18 +242,6 @@ impl ZfsImageStore {
             return Err(ZfsImageStoreError(e));
         }
 
-        let entries = std::fs::read_dir(root_dir)
-            .map_err(|e| ZfsImageStoreError(e.to_string()))?
-            .collect::<Vec<_>>();
-        if entries.len() > 0 {
-            let e = format!(
-                "root dir [{}] is not empty. Contains {:?}",
-                root_dir.display(),
-                entries
-            );
-            return Err(ZfsImageStoreError(e));
-        }
-
         if !zfs_pool
             .exists()
             .map_err(|e| ZfsImageStoreError(e.to_string()))?
@@ -289,10 +278,11 @@ impl ZfsImageStore {
     pub async fn snapshot(
         &self,
         manifest_ref: &ManifestRef,
+        platform: &ImagePlatform,
     ) -> Result<ZfsSnapshot, ZfsImageStoreError> {
         let image_manifest = self
             .registry_client
-            .resolve_image_manifest(manifest_ref)
+            .resolve_image_manifest(manifest_ref, platform)
             .await
             .map_err(|e| ZfsImageStoreError(e.to_string()))?;
 
