@@ -91,21 +91,21 @@ impl ToString for JailConfig {
         // Permissions
         s.push_str("securelevel = 1;\n");
         s.push_str("children.max = 10;\n");
+        s.push_str("allow.suser = 1;\n");
+        s.push_str("allow.reserved_ports = 1;\n");
+        s.push_str("allow.quotas = 1;\n");
         s.push_str("allow.set_hostname = 0;\n");
         s.push_str("allow.sysvipc = 0;\n");
         s.push_str("allow.raw_sockets = 0;\n");
         s.push_str("allow.chflags = 0;\n");
         s.push_str("allow.mount = 0;\n");
         s.push_str("allow.mount.devfs = 0;\n");
-        s.push_str("allow.quotas = 1;\n");
         s.push_str("allow.read_msgbuf = 0;\n");
         s.push_str("allow.socket_af = 0;\n");
         s.push_str("allow.mlock = 0;\n");
         s.push_str("allow.nfsd = 0;\n");
-        s.push_str("allow.reserved_ports = 1;\n");
         s.push_str("allow.unprivileged_parent_tampering = 0;\n");
         s.push_str("allow.unprivileged_proc_debug = 0;\n");
-        s.push_str("allow.suser = 0;\n");
         s.push_str("allow.extattr = 0;\n");
         s.push_str("allow.adjtime = 0;\n");
         s.push_str("allow.settime = 0;\n");

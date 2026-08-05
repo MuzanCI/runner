@@ -141,7 +141,7 @@ impl JailSandboxer {
     ) -> JailConfig {
         let name = format!("sandbox-{}", sandbox_id.to_string());
         let path = sandbox_dir.join("root");
-        let hostname = format!("sandbox-${sandbox_id}.local");
+        let hostname = format!("sandbox-{sandbox_id}.local");
         let epair_interface = format!("epair{slot_id}");
         let epair_host_interface = format!("epair{slot_id}a");
         let epair_jail_interface = format!("epair{slot_id}b");
@@ -199,6 +199,8 @@ impl JailSandboxer {
         ];
 
         let exec_release = vec![
+            // Unmount devfs
+            format!("umount {}/dev", path.display()),
             // Unmount and destroy ZFS dataset
             format!("zfs destroy -r {}", zfs_dataset),
         ];
