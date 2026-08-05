@@ -191,18 +191,18 @@ impl JailSandboxer {
         ];
 
         let exec_poststop = vec![
-            // Remove vmnet interface peer from bridge
+            // Remove vnet interface peer from bridge
             format!(
                 "ifconfig {} deletem {}",
                 self.bridge_if, epair_host_interface,
             ),
+            // Destroy vnet interfaces.
+            format!("ifconfig {} destroy", epair_host_interface),
         ];
 
         let exec_release = vec![
-            // Unmount devfs
-            format!("umount {}/dev", path.display()),
             // Unmount and destroy ZFS dataset
-            format!("zfs destroy -r {}", zfs_dataset),
+            format!("zfs destroy {}", zfs_dataset),
         ];
 
         JailConfig::new(
@@ -231,14 +231,11 @@ impl Sandboxer for JailSandboxer {
             .reserve()
             .map_err(|e| SandboxerError(e.to_string()))?;
 
-        eprintln!("reserved slot");
         let snapshot = self
             .image_store
             .snapshot(&config.manifest_ref)
             .await
             .map_err(|e| SandboxerError(e.to_string()))?;
-
-        eprintln!("snapshot created");
 
         let sandbox_dir = self.sandbox_dir.join(&config.sandbox_id.to_string());
         std::fs::create_dir_all(&sandbox_dir).map_err(|e| SandboxerError(e.to_string()))?;
@@ -253,12 +250,35 @@ impl Sandboxer for JailSandboxer {
             zfs_quota,
         )?;
 
-        eprintln!("jail created");
-
-        let sandbox = JailSandbox::new(jail_conf, slot);
-
-        eprintln!("sandbox created");
+        let sandbox = JailSandbox::new(config, jail_conf, slot);
 
         Ok(Arc::new(sandbox))
+    }
+
+    fn destroy(&self, sandbox: Arc<dyn Sandbox>) -> Result<(), SandboxerError> {
+        let sandbox_dir = self
+            .sandbox_dir
+            .join(&sandbox.config().sandbox_id.to_string());
+
+        let jail_conf_path = sandbox_dir.join("jail.conf");
+        let jail_name = format!("sandbox-{}", &sandbox.config().sandbox_id.to_string());
+
+        // Destroy jail.
+        {
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(format!(
+                    "jail -r -f {} {}",
+                    jail_conf_path.display(),
+                    jail_name,
+                ))
+                .output()
+                .map_err(|e| SandboxerError(e.to_string()))?;
+            if !output.status.success() {
+                let e = String::from_utf8_lossy(&output.stderr).into_owned();
+                Err(SandboxerError(e))?;
+            }
+        }
+        Ok(())
     }
 }

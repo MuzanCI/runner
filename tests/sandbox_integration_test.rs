@@ -40,9 +40,13 @@ fn sandbox_integration_test() -> anyhow::Result<()> {
             manifest_ref: ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")?,
         };
 
-        sandboxer.create(sandbox_config).await?;
+        let sandbox = sandboxer.create(sandbox_config).await?;
 
         eprintln!("created sandbox");
+
+        sandboxer.destroy(sandbox)?;
+
+        eprintln!("destroyed sandbox");
 
         Ok(())
     })

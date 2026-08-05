@@ -12,11 +12,13 @@ use tokio_util::codec::FramedRead;
 use tokio_util::codec::LinesCodec;
 
 use crate::sandbox::Sandbox;
+use crate::sandbox::SandboxConfig;
 use crate::sandbox::SandboxError;
 use crate::sandbox::jail_config::JailConfig;
 use crate::sandbox::jail_slot::JailSlot;
 
 pub struct JailSandbox {
+    config: SandboxConfig,
     jail_conf: JailConfig,
 
     /// When dropped, the jail slot is automatically restored to [`FreeJailSlots`](crate::jail::jail_slot::FreeJailSlots).
@@ -24,8 +26,9 @@ pub struct JailSandbox {
 }
 
 impl JailSandbox {
-    pub fn new(jail_conf: JailConfig, slot: JailSlot) -> Self {
+    pub fn new(config: SandboxConfig, jail_conf: JailConfig, slot: JailSlot) -> Self {
         JailSandbox {
+            config,
             jail_conf,
             _slot: slot,
         }
@@ -34,6 +37,10 @@ impl JailSandbox {
 
 #[async_trait::async_trait]
 impl Sandbox for JailSandbox {
+    fn config(&self) -> &SandboxConfig {
+        &self.config
+    }
+
     async fn run(
         &self,
         cmd_str: &str,

@@ -42,6 +42,8 @@ where
     -> Result<(), SandboxError>;
 
     async fn read_file(&self, path: &Path) -> Result<String, SandboxError>;
+
+    fn config(&self) -> &SandboxConfig;
 }
 
 pub type SandboxId = uuid::Uuid;
@@ -56,4 +58,5 @@ where
     Self: Send + Sync,
 {
     async fn create(&self, config: SandboxConfig) -> Result<Arc<dyn Sandbox>, SandboxerError>;
+    fn destroy(&self, sandbox: Arc<dyn Sandbox>) -> Result<(), SandboxerError>;
 }
