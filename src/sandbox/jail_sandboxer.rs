@@ -153,10 +153,6 @@ impl JailSandboxer {
         let epair_host_interface = format!("epair{slot_id}a");
         let epair_jail_interface = format!("epair{slot_id}b");
 
-        // Jail IP=11.0.1.$SLOT_ID
-        // Netmask=255.255.0.0
-        // Broadcast=11.0.255.255
-        // Bridge IP=11.0.0.1
         let ip_addr = Ipv4Addr::new(11, 0, 1, slot_id as u8);
 
         let exec_console_log = sandbox_dir.join("exec_console_log.txt");
@@ -207,18 +203,28 @@ impl JailSandboxer {
 
         let exec_created = vec![];
 
-        let exec_start = vec![
-            // Init loopback interface
-            format!("/sbin/ifconfig lo0 127.0.0.1 up"),
+        let mut exec_start = vec![
             // Acquire IP address for vmnet interface
             format!(
                 "/sbin/ifconfig {epair_jail_interface} inet {ip_addr} netmask 255.255.0.0 broadcast 11.0.255.255 up"
             ),
             // Add default route
             format!("/sbin/route add default 11.0.0.1"),
+            // Add default nameserver
+            format!("/bin/echo 'nameserver 1.1.1.1' > /etc/resolv.conf"),
             // Start base services
             format!("/bin/sh /etc/rc"),
         ];
+
+        match &rootfs {
+            JailRootfs::Linux { .. } => {
+                exec_start.push(format!(
+                    "/bin/echo 'nameserver 1.1.1.1' > /compat/linux/etc/resolv.conf"
+                ));
+            }
+            JailRootfs::FreeBSD { .. } => {}
+            _ => {}
+        }
 
         let exec_stop = vec![
             // Stop base services
