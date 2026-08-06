@@ -16,7 +16,7 @@ use muzanci_runner::sandbox::jail_sandboxer::JailSandboxer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let root_dir = PathBuf::from("/tmp/muzanci_runner/root_dir");
+    let root_dir = PathBuf::from(format!("/tmp/muzanci_runner/root_dir"));
     std::fs::create_dir_all(&root_dir)?;
 
     eprintln!("Created test dir [{}]", root_dir.display());
@@ -36,10 +36,10 @@ async fn main() -> anyhow::Result<()> {
 
     eprintln!("Created jail sandboxer");
 
-    let manifest_ref = ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")?;
+    let manifest_ref = ManifestRef::try_from("alpine:3.23.5")?;
     let platform = ImagePlatform {
         architecture: ImagePlatformArchitecture::ARM64,
-        os: ImagePlatformOs::FREEBSD,
+        os: ImagePlatformOs::LINUX,
     };
     let sandbox_config = SandboxConfig {
         sandbox_id: Uuid::now_v7(),

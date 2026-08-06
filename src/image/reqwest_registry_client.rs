@@ -75,22 +75,20 @@ impl RegistryClient for ReqwestRegistryClient {
 
         match media_type {
             MediaType::OciImageIndexV1Json => {
-                tracing::info!(
-                    "Received image index for '{}', looking for linux/arm64 manifest",
-                    url
-                );
+                tracing::info!("Received image index for [{}]", url);
+
                 // Parse response body as JSON into ImageIndex struct.
                 let image_index = res
                     .json::<ImageIndex>()
                     .await
                     .map_err(|e| RegistryClientError(e.to_string()))?;
 
-                // Find manifest descriptor matching "linux/arm64".
+                // Find manifest descriptor matching platform.
                 let manifest_descriptor = image_index
                     .manifests
                     .ok_or_else(|| {
                         RegistryClientError(format!(
-                            "Image index from '{}' does not contain any manifests",
+                            "Image index from [{}] does not contain any manifests",
                             url
                         ))
                     })?
@@ -101,15 +99,16 @@ impl RegistryClient for ReqwestRegistryClient {
                     })
                     .ok_or_else(|| {
                         RegistryClientError(format!(
-                            "No manifest found for platform '{}/{}' in image index from '{}'",
-                            platform.os, platform.architecture, url
+                            "No manifest found for platform [{}] in image index from [{}]",
+                            platform, url
                         ))
                     })?;
 
                 let digest = manifest_descriptor.digest.clone();
 
                 tracing::info!(
-                    "Found manifest for 'linux/arm64' in image index from '{}', digest: '{:?}'",
+                    "Found manifest for [{}] in image index from [{}], digest: [{}]",
+                    platform,
                     url,
                     digest,
                 );

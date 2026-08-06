@@ -14,6 +14,8 @@ use muzanci_transport::channel::WorkerSchedulerMessage;
 use crate::RunnerState;
 use crate::evaluator::Evaluator;
 use crate::image::image::ImagePlatform;
+use crate::image::image::ImagePlatformArchitecture;
+use crate::image::image::ImagePlatformOs;
 use crate::image::manifest_ref::ManifestRef;
 use crate::worker::Worker;
 
@@ -249,8 +251,8 @@ impl WorkerScheduler {
                         let manifest_ref =
                             ManifestRef::try_from("freebsd/freebsd-toolchain:latest")?;
                         let platform = ImagePlatform {
-                            os: "freebsd".to_string(),
-                            architecture: "arm64".to_string(),
+                            architecture: ImagePlatformArchitecture::ARM64,
+                            os: ImagePlatformOs::FREEBSD,
                         };
                         Worker::spawn(
                             self.runner_state.clone(),

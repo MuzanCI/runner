@@ -17,6 +17,8 @@ use tokio::sync::mpsc;
 use crate::RunnerState;
 use crate::capacity::EvaluationCapacity;
 use crate::image::image::ImagePlatform;
+use crate::image::image::ImagePlatformArchitecture;
+use crate::image::image::ImagePlatformOs;
 use crate::image::manifest_ref::ManifestRef;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
@@ -90,9 +92,10 @@ impl Evaluator {
 
     async fn main(&mut self) -> anyhow::Result<()> {
         let args = self.start().await?;
+        // TODO: Detect runner host architecture.
         let platform = ImagePlatform {
-            os: "freebsd".to_string(),
-            architecture: "arm64".to_string(),
+            architecture: ImagePlatformArchitecture::ARM64,
+            os: ImagePlatformOs::FREEBSD,
         };
         let config = SandboxConfig {
             sandbox_id: SandboxId::now_v7(),

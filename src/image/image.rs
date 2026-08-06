@@ -3,6 +3,8 @@ use std::str::FromStr;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::DeserializeFromStr;
+use serde_with::SerializeDisplay;
 
 use crate::image::digest::Digest;
 
@@ -55,10 +57,52 @@ pub struct ImageIndex {
     pub manifests: Option<Vec<ImageManifestDescriptor>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    SerializeDisplay,
+    DeserializeFromStr,
+    PartialEq,
+    Eq,
+    strum::Display,
+    strum::EnumString
+)]
+#[strum(serialize_all = "lowercase")]
+pub enum ImagePlatformArchitecture {
+    AMD64,
+    ARM64,
+    #[strum(default)]
+    OTHER(String),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    SerializeDisplay,
+    DeserializeFromStr,
+    PartialEq,
+    Eq,
+    strum::Display,
+    strum::EnumString
+)]
+#[strum(serialize_all = "lowercase")]
+pub enum ImagePlatformOs {
+    LINUX,
+    FREEBSD,
+    #[strum(default)]
+    OTHER(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImagePlatform {
-    pub architecture: String,
-    pub os: String,
+    pub architecture: ImagePlatformArchitecture,
+    pub os: ImagePlatformOs,
+}
+
+impl std::fmt::Display for ImagePlatform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.os, self.architecture)
+    }
 }
 
 #[allow(dead_code)]
@@ -98,6 +142,33 @@ pub struct Rootfs {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_parse_image_platform() {
+        let input = r#"{"architecture": "arm64", "os": "linux"}"#;
+        let got = serde_json::from_str::<ImagePlatform>(input).unwrap();
+        let want = ImagePlatform {
+            architecture: ImagePlatformArchitecture::ARM64,
+            os: ImagePlatformOs::LINUX,
+        };
+        assert_eq!(want, got);
+
+        let input = r#"{"architecture": "amd64", "os": "freebsd"}"#;
+        let got = serde_json::from_str::<ImagePlatform>(input).unwrap();
+        let want = ImagePlatform {
+            architecture: ImagePlatformArchitecture::AMD64,
+            os: ImagePlatformOs::FREEBSD,
+        };
+        assert_eq!(want, got);
+
+        let input = r#"{"architecture": "unknown", "os": "unknown"}"#;
+        let got = serde_json::from_str::<ImagePlatform>(input).unwrap();
+        let want = ImagePlatform {
+            architecture: ImagePlatformArchitecture::OTHER("unknown".to_string()),
+            os: ImagePlatformOs::OTHER("unknown".to_string()),
+        };
+        assert_eq!(want, got);
+    }
 
     #[test]
     fn test_parse_image_index_json() {

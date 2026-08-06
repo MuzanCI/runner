@@ -1,12 +1,13 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::image::image::ImagePlatformOs;
 use crate::sandbox::NetworkInterface;
 
 pub type Execs = Vec<String>;
 
 pub struct JailConfig {
-    platform_os: String,
+    platform_os: ImagePlatformOs,
     name: String,
     jid: usize,
     path: PathBuf,
@@ -24,7 +25,7 @@ pub struct JailConfig {
 
 impl JailConfig {
     pub fn new(
-        platform_os: String,
+        platform_os: ImagePlatformOs,
         name: String,
         jid: usize,
         path: PathBuf,
@@ -116,19 +117,23 @@ impl ToString for JailConfig {
         s.push_str("allow.routing = 0;\n");
         s.push_str("allow.setaudit = 0;\n");
 
-        if self.platform_os == "linux" {
-            s.push_str("linux = new;\n");
-            s.push_str("mount.linprocfs;\n");
-            s.push_str("mount.linsysfs;\n");
-            s.push_str("mount += \"devfs     $path/compat/linux/dev     devfs     rw  0 0\";\n");
-            s.push_str("mount += \"tmpfs     $path/compat/linux/dev/shm tmpfs     rw,size=1g,mode=1777  0 0\";\n");
-            s.push_str(
-                "mount += \"fdescfs   $path/compat/linux/dev/fd  fdescfs   rw,linrdlnk 0 0\";\n",
-            );
-            s.push_str("mount += \"linprocfs $path/compat/linux/proc    linprocfs rw  0 0\";\n");
-            s.push_str("mount += \"linsysfs  $path/compat/linux/sys     linsysfs  rw  0 0\";\n");
-            s.push_str("mount += \"/tmp      $path/compat/linux/tmp     nullfs    rw  0 0\";\n");
-            s.push_str("mount += \"/home     $path/compat/linux/home    nullfs    rw  0 0\";\n");
+        match self.platform_os {
+            ImagePlatformOs::LINUX => {
+                s.push_str("linux = new;\n");
+                s.push_str("mount += \"devfs ${path}/compat/linux/dev devfs rw 0 0\";\n");
+                s.push_str(
+                    "mount += \"tmpfs ${path}/compat/linux/dev/shm tmpfs rw,size=1g,mode=1777 0 0\";\n",
+                );
+                s.push_str(
+                    "mount += \"fdescfs ${path}/compat/linux/dev/fd fdescfs rw,linrdlnk 0 0\";\n",
+                );
+                s.push_str("mount += \"linprocfs ${path}/compat/linux/proc linprocfs rw 0 0\";\n");
+                s.push_str("mount += \"linsysfs ${path}/compat/linux/sys linsysfs rw 0 0\";\n");
+                s.push_str("mount += \"/tmp ${path}/compat/linux/tmp nullfs rw 0 0\";\n");
+                s.push_str("mount += \"/home ${path}/compat/linux/home nullfs rw 0 0\";\n");
+            }
+            ImagePlatformOs::FREEBSD => {}
+            ImagePlatformOs::OTHER(_) => {}
         }
 
         // Exec psudo-parameters

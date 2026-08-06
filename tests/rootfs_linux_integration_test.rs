@@ -27,10 +27,10 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("Constructed ZFS image store");
 
     // Build snapshot from manifest ref.
-    let manifest_ref = ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")?;
+    let manifest_ref = ManifestRef::try_from("alpine:3.23.5")?;
     let platform = ImagePlatform {
         architecture: ImagePlatformArchitecture::ARM64,
-        os: ImagePlatformOs::FREEBSD,
+        os: ImagePlatformOs::LINUX,
     };
     let snapshot = image_store.snapshot(&manifest_ref, &platform).await?;
 

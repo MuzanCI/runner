@@ -7,6 +7,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use crate::image::image::ImagePlatform;
+use crate::image::image::ImagePlatformOs;
 use crate::image::manifest_ref::ManifestRef;
 use crate::image::zfs_image_store::ZfsImageStore;
 use crate::image::zfs_image_store::ZfsSnapshot;
@@ -22,6 +23,19 @@ use crate::sandbox::jail_slot::FreeJailSlots;
 use crate::sandbox::jail_slot::JailSlotId;
 
 pub type ZfsDatasetQuotaGigabyte = usize;
+
+pub enum JailRootfs {
+    Linux {
+        linux_dataset: String,
+        linux_snapshot: ZfsSnapshot,
+        freebsd_dataset: String,
+        freebsd_snapshot: ZfsSnapshot,
+    },
+    FreeBSD {
+        freebsd_dataset: String,
+        freebsd_snapshot: ZfsSnapshot,
+    },
+}
 
 #[derive(Clone)]
 pub struct JailSandboxer {
@@ -82,23 +96,11 @@ impl JailSandboxer {
         &self,
         sandbox_config: &SandboxConfig,
         slot_id: JailSlotId,
-        zfs_snapshot: ZfsSnapshot,
+        rootfs: JailRootfs,
         sandbox_dir: PathBuf,
         zfs_quota: ZfsDatasetQuotaGigabyte,
     ) -> Result<JailConfig, SandboxerError> {
-        let zfs_dataset = format!(
-            "{}/sandbox_rootfs-{}",
-            self.image_store.zfs_pool(),
-            sandbox_config.sandbox_id,
-        );
-        let jail_conf = self.jail_config(
-            sandbox_config,
-            &sandbox_dir,
-            slot_id,
-            zfs_dataset,
-            zfs_snapshot,
-            zfs_quota,
-        );
+        let jail_conf = self.jail_config(sandbox_config, &sandbox_dir, slot_id, rootfs, zfs_quota);
         let jail_conf_path = sandbox_dir.join("jail.conf");
 
         // Create jail configuration file.
@@ -137,8 +139,7 @@ impl JailSandboxer {
         sandbox_config: &SandboxConfig,
         sandbox_dir: &Path,
         slot_id: JailSlotId,
-        zfs_dataset: String,
-        zfs_snapshot: ZfsSnapshot,
+        rootfs: JailRootfs,
         zfs_quota: ZfsDatasetQuotaGigabyte,
     ) -> JailConfig {
         let sandbox_id = sandbox_config.sandbox_id.to_string();
@@ -157,13 +158,39 @@ impl JailSandboxer {
 
         let exec_console_log = sandbox_dir.join("exec_console_log.txt");
 
-        let exec_prepare = vec![
-            format!(
-                "zfs clone -o mountpoint={} {zfs_snapshot} {zfs_dataset}",
-                path.display()
-            ),
-            format!("zfs set quota={zfs_quota}G {zfs_dataset}"),
-        ];
+        let exec_prepare = match &rootfs {
+            JailRootfs::Linux {
+                linux_dataset,
+                linux_snapshot,
+                freebsd_dataset,
+                freebsd_snapshot,
+            } => {
+                vec![
+                    format!(
+                        "zfs clone -o mountpoint={} {freebsd_snapshot} {freebsd_dataset}",
+                        path.display()
+                    ),
+                    format!("zfs set quota={zfs_quota}G {freebsd_dataset}"),
+                    format!("mkdir -p {}/compat/linux", path.display()),
+                    format!(
+                        "zfs clone -o mountpoint={}/compat/linux {linux_snapshot} {linux_dataset}",
+                        path.display()
+                    ),
+                ]
+            }
+            JailRootfs::FreeBSD {
+                freebsd_dataset,
+                freebsd_snapshot,
+            } => {
+                vec![
+                    format!(
+                        "zfs clone -o mountpoint={} {freebsd_snapshot} {freebsd_dataset}",
+                        path.display()
+                    ),
+                    format!("zfs set quota={zfs_quota}G {freebsd_dataset}"),
+                ]
+            }
+        };
 
         let exec_prestart = vec![
             // Create vmnet interface and peer
@@ -203,10 +230,23 @@ impl JailSandboxer {
             format!("ifconfig {} destroy", epair_host_interface),
         ];
 
-        let exec_release = vec![
-            // Unmount and destroy ZFS dataset
-            format!("zfs destroy {}", zfs_dataset),
-        ];
+        let exec_release = match &rootfs {
+            JailRootfs::Linux {
+                linux_dataset,
+                freebsd_dataset,
+                ..
+            } => {
+                vec![
+                    format!("zfs destroy {}", linux_dataset),
+                    format!("zfs destroy {}", freebsd_dataset),
+                ]
+            }
+            JailRootfs::FreeBSD {
+                freebsd_dataset, ..
+            } => {
+                vec![format!("zfs destroy {}", freebsd_dataset)]
+            }
+        };
 
         JailConfig::new(
             sandbox_config.platform.os.clone(),
@@ -235,26 +275,78 @@ impl Sandboxer for JailSandboxer {
             .reserve()
             .map_err(|e| SandboxerError(e.to_string()))?;
 
-        let snapshot = self
-            .image_store
-            .snapshot(&config.manifest_ref, &config.platform)
-            .await
-            .map_err(|e| SandboxerError(e.to_string()))?;
+        let rootfs = match config.platform.os {
+            ImagePlatformOs::LINUX => {
+                let linux_dataset = format!(
+                    "{}/sandbox_rootfs-linux-{}",
+                    self.image_store.zfs_pool(),
+                    config.sandbox_id,
+                );
+                let linux_snapshot = self
+                    .image_store
+                    .snapshot(&config.manifest_ref, &config.platform)
+                    .await
+                    .map_err(|e| SandboxerError(e.to_string()))?;
 
-        if config.platform.os == "linux" {
-            // Linux images must be run on a FreeBSD image.
-            let freebsd_manifest_ref = ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")
-                .map_err(|e| SandboxerError(e.to_string()))?;
-            let freebsd_platform = ImagePlatform {
-                os: "freebsd".to_string(),
-                architecture: config.platform.architecture.clone(),
-            };
-            let _freebsd_snapshot = self
-                .image_store
-                .snapshot(&freebsd_manifest_ref, &freebsd_platform)
-                .await
-                .map_err(|e| SandboxerError(e.to_string()))?;
-        }
+                // Linux images must be run on a FreeBSD image.
+                let freebsd_dataset = format!(
+                    "{}/sandbox_rootfs-freebsd-{}",
+                    self.image_store.zfs_pool(),
+                    config.sandbox_id,
+                );
+                let freebsd_snapshot = {
+                    let freebsd_manifest_ref =
+                        ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")
+                            .map_err(|e| SandboxerError(e.to_string()))?;
+                    let freebsd_platform = ImagePlatform {
+                        os: ImagePlatformOs::FREEBSD,
+                        architecture: config.platform.architecture.clone(),
+                    };
+                    self.image_store
+                        .snapshot(&freebsd_manifest_ref, &freebsd_platform)
+                        .await
+                        .map_err(|e| SandboxerError(e.to_string()))?
+                };
+
+                JailRootfs::Linux {
+                    linux_dataset,
+                    linux_snapshot,
+                    freebsd_dataset,
+                    freebsd_snapshot,
+                }
+            }
+            ImagePlatformOs::FREEBSD => {
+                let freebsd_dataset = format!(
+                    "{}/sandbox_rootfs-freebsd-{}",
+                    self.image_store.zfs_pool(),
+                    config.sandbox_id,
+                );
+                let freebsd_snapshot = {
+                    let freebsd_manifest_ref =
+                        ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")
+                            .map_err(|e| SandboxerError(e.to_string()))?;
+                    let freebsd_platform = ImagePlatform {
+                        os: ImagePlatformOs::FREEBSD,
+                        architecture: config.platform.architecture.clone(),
+                    };
+                    self.image_store
+                        .snapshot(&freebsd_manifest_ref, &freebsd_platform)
+                        .await
+                        .map_err(|e| SandboxerError(e.to_string()))?
+                };
+
+                JailRootfs::FreeBSD {
+                    freebsd_dataset,
+                    freebsd_snapshot,
+                }
+            }
+            ImagePlatformOs::OTHER(_) => {
+                return Err(SandboxerError(format!(
+                    "Unsupported platform: {:?}",
+                    config.platform.os
+                )));
+            }
+        };
 
         let sandbox_dir = self.sandbox_dir.join(&config.sandbox_id.to_string());
         std::fs::create_dir_all(&sandbox_dir).map_err(|e| SandboxerError(e.to_string()))?;
@@ -262,7 +354,7 @@ impl Sandboxer for JailSandboxer {
         let zfs_quota = 10;
 
         let jail_conf =
-            self.create_jail(&config, slot.slot_id(), snapshot, sandbox_dir, zfs_quota)?;
+            self.create_jail(&config, slot.slot_id(), rootfs, sandbox_dir, zfs_quota)?;
 
         let sandbox = JailSandbox::new(config, jail_conf, slot);
 

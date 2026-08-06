@@ -42,6 +42,8 @@ async-compression = { version = "0.4.43", features = ["gzip", "tokio"] }
 tokio-stream = "0.1.19"
 tokio-tar = "0.3.1"
 futures-util = "0.3.33"
+strum = { version = "0.28.0", features = ["derive", "strum_macros"] }
+serde_with = "3.21.0"
 
 [lib]
 name = "muzanci_runner"
@@ -60,4 +62,14 @@ harness = false
 [[test]]
 name = "sandbox_freebsd_integration_test"
 path = "tests/sandbox_freebsd_integration_test.rs"
+harness = false
+
+[[test]]
+name = "rootfs_linux_integration_test"
+path = "tests/rootfs_linux_integration_test.rs"
+harness = false
+
+[[test]]
+name = "sandbox_linux_integration_test"
+path = "tests/sandbox_linux_integration_test.rs"
 harness = false
