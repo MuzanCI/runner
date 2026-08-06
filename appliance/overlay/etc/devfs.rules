@@ -1,0 +1,2 @@
+[devfsrules_jail_vnet_sandbox=100]
+add include $devfsrules_jail_vnet

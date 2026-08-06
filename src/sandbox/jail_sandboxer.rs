@@ -15,6 +15,7 @@ use crate::image::zfs_image_store::ZfsSnapshot;
 use crate::sandbox::NetworkInterface;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
+use crate::sandbox::SandboxId;
 use crate::sandbox::Sandboxer;
 use crate::sandbox::SandboxerError;
 use crate::sandbox::jail_config::JailConfig;
@@ -73,12 +74,6 @@ impl JailSandboxer {
             }
         }
 
-        // pf rules are assumed to exist for NAT table
-        // dummy net pipes are assumed to exist.
-        // sysrctl properties are assumed to be set.
-        // /boot/loader.conf is assumed to be set.
-        // devfs service is assumed to be started.
-
         let free_slots =
             FreeJailSlots::try_new(num_slots).map_err(|e| SandboxerError(e.to_string()))?;
 
@@ -100,7 +95,14 @@ impl JailSandboxer {
         sandbox_dir: PathBuf,
         zfs_quota: ZfsDatasetQuotaGigabyte,
     ) -> Result<JailConfig, SandboxerError> {
-        let jail_conf = self.jail_config(sandbox_config, &sandbox_dir, slot_id, rootfs, zfs_quota);
+        let jail_conf = self.jail_config(
+            sandbox_config.sandbox_id.clone(),
+            &sandbox_dir,
+            slot_id,
+            sandbox_config.platform.os.clone(),
+            rootfs,
+            zfs_quota,
+        );
         let jail_conf_path = sandbox_dir.join("jail.conf");
 
         // Create jail configuration file.
@@ -136,13 +138,14 @@ impl JailSandboxer {
 
     fn jail_config(
         &self,
-        sandbox_config: &SandboxConfig,
+        sandbox_id: SandboxId,
         sandbox_dir: &Path,
         slot_id: JailSlotId,
+        platform_os: ImagePlatformOs,
         rootfs: JailRootfs,
         zfs_quota: ZfsDatasetQuotaGigabyte,
     ) -> JailConfig {
-        let sandbox_id = sandbox_config.sandbox_id.to_string();
+        let sandbox_id = sandbox_id.to_string();
         let name = format!("sandbox-{sandbox_id}");
         let path = sandbox_dir.join("root");
         let hostname = format!("sandbox-{sandbox_id}.local");
@@ -211,6 +214,8 @@ impl JailSandboxer {
             format!(
                 "/sbin/ifconfig {epair_jail_interface} inet {ip_addr} netmask 255.255.0.0 broadcast 11.0.255.255 up"
             ),
+            // Add default route
+            format!("/sbin/route add default 11.0.0.1"),
             // Start base services
             format!("/bin/sh /etc/rc"),
         ];
@@ -249,7 +254,7 @@ impl JailSandboxer {
         };
 
         JailConfig::new(
-            sandbox_config.platform.os.clone(),
+            platform_os,
             name,
             slot_id,
             path,
@@ -274,6 +279,8 @@ impl Sandboxer for JailSandboxer {
             .free_slots
             .reserve()
             .map_err(|e| SandboxerError(e.to_string()))?;
+
+        // TODO: Validate config.platform.arch is supported.
 
         let rootfs = match config.platform.os {
             ImagePlatformOs::LINUX => {
@@ -342,7 +349,7 @@ impl Sandboxer for JailSandboxer {
             }
             ImagePlatformOs::OTHER(_) => {
                 return Err(SandboxerError(format!(
-                    "Unsupported platform: {:?}",
+                    "Unsupported platform: [{}]",
                     config.platform.os
                 )));
             }
