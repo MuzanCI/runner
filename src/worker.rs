@@ -171,7 +171,7 @@ impl Worker {
                 step_id,
                 output_rx,
             );
-            let process_handle = sandbox.run(&step.command, envs, output_tx);
+            let process_handle = sandbox.run(&step.command, &envs, output_tx);
             let (process_result, _output_result) = join!(process_handle, output_handle);
 
             match process_result?.code() {

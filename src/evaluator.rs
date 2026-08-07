@@ -157,7 +157,7 @@ impl Evaluator {
             );
             tracing::error!("Running command: [{}]", command);
             let secrets = HashMap::new(); // TODO: Optionally add secrets for evaluator.
-            let process_handle = sandbox.run(&command, secrets, output_tx);
+            let process_handle = sandbox.run(&command, &secrets, output_tx);
             let (process_result, _output_result) = tokio::join!(process_handle, output_handle);
             process_result
         };

@@ -36,7 +36,7 @@ where
     async fn run(
         &self,
         cmd_str: &str,
-        envs: HashMap<String, String>,
+        envs: &HashMap<String, String>,
         output_tx: mpsc::Sender<ProcessOutput>,
     ) -> Result<ExitStatus, SandboxError>;
 

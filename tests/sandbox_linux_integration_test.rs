@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use muzanci_runner::image::image::ImagePlatform;
 use muzanci_runner::image::image::ImagePlatformArchitecture;
 use muzanci_runner::image::image::ImagePlatformOs;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use muzanci_runner::image::manifest_ref::ManifestRef;
@@ -50,6 +52,24 @@ async fn main() -> anyhow::Result<()> {
     let sandbox = sandboxer.create(sandbox_config).await?;
 
     eprintln!("created sandbox");
+
+    let cmd_strs = vec![
+        "ping -c 3 1.1.1.1",
+        "grep -E '^nameserver' /etc/resolv.conf",
+    ];
+
+    let envs = HashMap::new();
+    let (output_tx, mut output_rx) = mpsc::channel(1);
+    tokio::spawn(async move {
+        while let Some(output) = output_rx.recv().await {
+            eprintln!("received output: {:?}", output);
+        }
+    });
+    for cmd_str in cmd_strs {
+        let exit_status = sandbox.run(cmd_str, &envs, output_tx.clone()).await?;
+        assert!(exit_status.success());
+        eprintln!("successfully ran [{}]", cmd_str);
+    }
 
     sandboxer.destroy(sandbox)?;
 

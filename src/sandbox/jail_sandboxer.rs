@@ -133,6 +133,35 @@ impl JailSandboxer {
             }
         }
 
+        // Apply resource limits to jail.
+        {
+            let cmd_strs = vec![
+                format!("rctl -a jail:{}:pcpu:deny=100", jail_conf.name()),
+                format!("rctl -a jail:{}:memoryuse:deny=1g", jail_conf.name()),
+                format!("rctl -a jail:{}:maxproc:deny=512", jail_conf.name()),
+                format!("rctl -a jail:{}:nthr:deny=512", jail_conf.name()),
+                format!("rctl -a jail:{}:msgqqueued:deny=0", jail_conf.name()),
+                format!("rctl -a jail:{}:msgqsize:deny=0", jail_conf.name()),
+                format!("rctl -a jail:{}:nmsgq:deny=0", jail_conf.name()),
+                format!("rctl -a jail:{}:nsem:deny=512", jail_conf.name()),
+                format!("rctl -a jail:{}:nsemop:deny=32", jail_conf.name()),
+                format!("rctl -a jail:{}:nshm:deny=32", jail_conf.name()),
+                format!("rctl -a jail:{}:shmsize:deny=128M", jail_conf.name()),
+            ];
+
+            for cmd_str in cmd_strs {
+                let output = Command::new("sh")
+                    .arg("-c")
+                    .arg(cmd_str)
+                    .output()
+                    .map_err(|e| SandboxerError(e.to_string()))?;
+                if !output.status.success() {
+                    let e = String::from_utf8_lossy(&output.stderr).into_owned();
+                    Err(SandboxerError(e))?;
+                }
+            }
+        }
+
         Ok(jail_conf)
     }
 
@@ -291,7 +320,7 @@ impl Sandboxer for JailSandboxer {
         let rootfs = match config.platform.os {
             ImagePlatformOs::LINUX => {
                 let linux_dataset = format!(
-                    "{}/sandbox_rootfs-linux-{}",
+                    "{}/rootfs-linux-sandbox-{}",
                     self.image_store.zfs_pool(),
                     config.sandbox_id,
                 );
@@ -303,7 +332,7 @@ impl Sandboxer for JailSandboxer {
 
                 // Linux images must be run on a FreeBSD image.
                 let freebsd_dataset = format!(
-                    "{}/sandbox_rootfs-freebsd-{}",
+                    "{}/rootfs-freebsd-sandbox-{}",
                     self.image_store.zfs_pool(),
                     config.sandbox_id,
                 );
@@ -330,7 +359,7 @@ impl Sandboxer for JailSandboxer {
             }
             ImagePlatformOs::FREEBSD => {
                 let freebsd_dataset = format!(
-                    "{}/sandbox_rootfs-freebsd-{}",
+                    "{}/rootfs-freebsd-sandbox-{}",
                     self.image_store.zfs_pool(),
                     config.sandbox_id,
                 );
@@ -395,9 +424,23 @@ impl Sandboxer for JailSandboxer {
                 .map_err(|e| SandboxerError(e.to_string()))?;
             if !output.status.success() {
                 let e = String::from_utf8_lossy(&output.stderr).into_owned();
-                Err(SandboxerError(e))?;
+                return Err(SandboxerError(e));
             }
         }
+
+        // Remove resource limits.
+        {
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(format!("rctl -r jail:{}", jail_name))
+                .output()
+                .map_err(|e| SandboxerError(e.to_string()))?;
+            if !output.status.success() {
+                let e = String::from_utf8_lossy(&output.stderr).into_owned();
+                return Err(SandboxerError(e));
+            }
+        }
+
         Ok(())
     }
 }

@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use tokio_util::codec::FramedRead;
 use tokio_util::codec::LinesCodec;
 
+use crate::image::image::ImagePlatformOs;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
 use crate::sandbox::SandboxError;
@@ -44,9 +45,17 @@ impl Sandbox for JailSandbox {
     async fn run(
         &self,
         cmd_str: &str,
-        envs: HashMap<String, String>,
+        envs: &HashMap<String, String>,
         output_tx: mpsc::Sender<ProcessOutput>,
     ) -> Result<ExitStatus, SandboxError> {
+        let cmd_str = match &self.config.platform.os {
+            ImagePlatformOs::LINUX => format!("chroot /compat/linux {}", cmd_str),
+            ImagePlatformOs::FREEBSD => cmd_str.to_string(),
+            ImagePlatformOs::OTHER(os) => {
+                return Err(SandboxError(format!("unsupported os [{}]", os)));
+            }
+        };
+
         let mut child = Command::new("sh")
             .arg("-c")
             .arg(format!("jexec {} {}", self.jail_conf.name(), cmd_str))
