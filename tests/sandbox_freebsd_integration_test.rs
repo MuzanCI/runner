@@ -5,6 +5,7 @@ use std::sync::Arc;
 use muzanci_runner::image::image::ImagePlatform;
 use muzanci_runner::image::image::ImagePlatformArchitecture;
 use muzanci_runner::image::image::ImagePlatformOs;
+use muzanci_transport::channel::ProcessOutput;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -62,7 +63,11 @@ async fn main() -> anyhow::Result<()> {
     let (output_tx, mut output_rx) = mpsc::channel(1);
     tokio::spawn(async move {
         while let Some(output) = output_rx.recv().await {
-            eprintln!("received output: {:?}", output);
+            let line = match &output {
+                ProcessOutput::Stdout { line, .. } => line,
+                ProcessOutput::Stderr { line, .. } => line,
+            };
+            eprintln!("{line}");
         }
     });
     for cmd_str in cmd_strs {
