@@ -14,10 +14,6 @@ use muzanci_transport::channel::WorkerSchedulerMessage;
 use crate::RunnerState;
 use crate::evaluator::Evaluator;
 use crate::worker::Worker;
-use muzanci_image::image::ImagePlatform;
-use muzanci_image::image::ImagePlatformArchitecture;
-use muzanci_image::image::ImagePlatformOs;
-use muzanci_image::manifest_ref::ManifestRef;
 
 pub struct EvaluatorSchedulerHandle {
     handle: tokio::task::JoinHandle<()>,

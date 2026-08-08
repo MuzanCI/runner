@@ -252,7 +252,6 @@ impl JailSandboxer {
                 ));
             }
             JailRootfs::FreeBSD { .. } => {}
-            _ => {}
         }
 
         let exec_stop = vec![
