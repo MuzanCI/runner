@@ -11,12 +11,12 @@ use tokio::sync::mpsc;
 use tokio_util::codec::FramedRead;
 use tokio_util::codec::LinesCodec;
 
-use crate::image::image::ImagePlatformOs;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
 use crate::sandbox::SandboxError;
 use crate::sandbox::jail_config::JailConfig;
 use crate::sandbox::jail_slot::JailSlot;
+use muzanci_image::image::ImagePlatformOs;
 
 pub struct JailSandbox {
     config: SandboxConfig,

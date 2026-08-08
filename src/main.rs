@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use muzanci_image::reqwest_registry_client::ReqwestRegistryClient;
 use muzanci_runner::RunnerState;
 use muzanci_runner::capacity::SharedAssignmentCapacity;
 use muzanci_runner::capacity::SharedEvaluationCapacity;
-use muzanci_runner::image::reqwest_registry_client::ReqwestRegistryClient;
-use muzanci_runner::image::zfs_image_store::ZfsImageStore;
-use muzanci_runner::image::zfs_image_store::ZfsPool;
 use muzanci_runner::sandbox::jail_sandboxer::JailSandboxer;
+use muzanci_runner::sandbox::zfs_image_store::ZfsImageStore;
+use muzanci_runner::sandbox::zfs_image_store::ZfsPool;
 use muzanci_runner::scheduler::EvaluatorScheduler;
 use muzanci_runner::scheduler::WorkerScheduler;
 use muzanci_runner::secret::SecretService;

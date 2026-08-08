@@ -16,11 +16,11 @@ use tokio::sync::mpsc;
 
 use crate::RunnerState;
 use crate::capacity::AssignmentCapacity;
-use crate::image::image::ImagePlatform;
-use crate::image::manifest_ref::ManifestRef;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
 use crate::sandbox::SandboxId;
+use muzanci_image::image::ImagePlatform;
+use muzanci_image::manifest_ref::ManifestRef;
 
 pub struct WorkerHandle {
     handle: tokio::task::JoinHandle<()>,

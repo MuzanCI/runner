@@ -13,11 +13,11 @@ use muzanci_transport::channel::WorkerSchedulerMessage;
 
 use crate::RunnerState;
 use crate::evaluator::Evaluator;
-use crate::image::image::ImagePlatform;
-use crate::image::image::ImagePlatformArchitecture;
-use crate::image::image::ImagePlatformOs;
-use crate::image::manifest_ref::ManifestRef;
 use crate::worker::Worker;
+use muzanci_image::image::ImagePlatform;
+use muzanci_image::image::ImagePlatformArchitecture;
+use muzanci_image::image::ImagePlatformOs;
+use muzanci_image::manifest_ref::ManifestRef;
 
 pub struct EvaluatorSchedulerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -247,19 +247,12 @@ impl WorkerScheduler {
                 match self.reserve_task(task.task_id).await {
                     Ok(_) => {
                         tracing::info!("Successfully reserved task {:?}", task);
-                        // TODO: Add image field to job config.
-                        let manifest_ref =
-                            ManifestRef::try_from("freebsd/freebsd-toolchain:latest")?;
-                        let platform = ImagePlatform {
-                            architecture: ImagePlatformArchitecture::ARM64,
-                            os: ImagePlatformOs::FREEBSD,
-                        };
                         Worker::spawn(
                             self.runner_state.clone(),
                             task.task_id,
                             task.capacity,
-                            manifest_ref,
-                            platform,
+                            task.manifest_ref,
+                            task.platform,
                         );
                         permit.commit();
                     }

@@ -6,11 +6,11 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
-use crate::image::image::ImagePlatform;
-use crate::image::image::ImagePlatformOs;
-use crate::image::manifest_ref::ManifestRef;
-use crate::image::zfs_image_store::ZfsImageStore;
-use crate::image::zfs_image_store::ZfsSnapshot;
+use crate::sandbox::zfs_image_store::ZfsImageStore;
+use crate::sandbox::zfs_image_store::ZfsSnapshot;
+use muzanci_image::image::ImagePlatform;
+use muzanci_image::image::ImagePlatformOs;
+use muzanci_image::manifest_ref::ManifestRef;
 
 use crate::sandbox::NetworkInterface;
 use crate::sandbox::Sandbox;

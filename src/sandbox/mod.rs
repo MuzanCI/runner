@@ -8,13 +8,14 @@ use tokio::sync::mpsc;
 
 use muzanci_transport::channel::ProcessOutput;
 
-use crate::image::image::ImagePlatform;
-use crate::image::manifest_ref::ManifestRef;
+use muzanci_image::image::ImagePlatform;
+use muzanci_image::manifest_ref::ManifestRef;
 
 pub mod jail_config;
 pub mod jail_sandbox;
 pub mod jail_sandboxer;
 pub mod jail_slot;
+pub mod zfs_image_store;
 
 pub type NetworkInterface = String;
 

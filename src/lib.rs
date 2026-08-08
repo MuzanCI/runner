@@ -17,7 +17,6 @@ use crate::secret::SecretService;
 
 pub mod capacity;
 pub mod evaluator;
-pub mod image;
 pub mod logging;
 pub mod sandbox;
 pub mod scheduler;

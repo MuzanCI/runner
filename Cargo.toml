@@ -11,6 +11,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["io-util", "net", "fs", "rt-multi-thread", "process", "signal"] }
 muzanci-transport = { path = "../muzanci-transport" }
 muzanci-interpreter = { path = "../muzanci-interpreter" }
+muzanci-image = { path = "../muzanci-image" }
 rustls = { version = "0.23.40"}
 tokio-rustls = "0.26.4"
 anyhow = "1.0.102"

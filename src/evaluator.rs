@@ -16,13 +16,13 @@ use tokio::sync::mpsc;
 
 use crate::RunnerState;
 use crate::capacity::EvaluationCapacity;
-use crate::image::image::ImagePlatform;
-use crate::image::image::ImagePlatformArchitecture;
-use crate::image::image::ImagePlatformOs;
-use crate::image::manifest_ref::ManifestRef;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
 use crate::sandbox::SandboxId;
+use muzanci_image::image::ImagePlatform;
+use muzanci_image::image::ImagePlatformArchitecture;
+use muzanci_image::image::ImagePlatformOs;
+use muzanci_image::manifest_ref::ManifestRef;
 
 const INTERPRETER_BIN_BYTES: &[u8] = include_bytes!("../embed/interpreter");
 

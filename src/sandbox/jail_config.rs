@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::image::image::ImagePlatformOs;
 use crate::sandbox::NetworkInterface;
+use muzanci_image::image::ImagePlatformOs;
 
 pub type Execs = Vec<String>;
 

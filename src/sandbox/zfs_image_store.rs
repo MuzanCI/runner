@@ -17,15 +17,15 @@ use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tokio_tar::Archive;
 
-use crate::image::blob_ref::BlobRef;
-use crate::image::digest::Digest;
-use crate::image::image::Descriptor;
-use crate::image::image::ImageConfig;
-use crate::image::image::ImageManifest;
-use crate::image::image::ImagePlatform;
-use crate::image::image::MediaType;
-use crate::image::manifest_ref::ManifestRef;
-use crate::image::registry_client::RegistryClient;
+use muzanci_image::blob_ref::BlobRef;
+use muzanci_image::digest::Digest;
+use muzanci_image::image::Descriptor;
+use muzanci_image::image::ImageConfig;
+use muzanci_image::image::ImageManifest;
+use muzanci_image::image::ImagePlatform;
+use muzanci_image::image::MediaType;
+use muzanci_image::manifest_ref::ManifestRef;
+use muzanci_image::registry_client::RegistryClient;
 
 #[derive(Debug, Clone)]
 pub struct ZfsDataset {
