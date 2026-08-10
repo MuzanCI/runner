@@ -29,17 +29,20 @@ async fn main() {
     let evaluation_capacity = SharedEvaluationCapacity::new(10);
     let assignment_capacity = SharedAssignmentCapacity::new(10);
 
-    let zfs_pool = ZfsPool::new("zroot");
-    let secret_service = Arc::new(SecretService::new(HashMap::new()));
-    let registry_client = Arc::new(ReqwestRegistryClient::new());
-    let root_dir = PathBuf::from("/tmp/runner");
-    let image_store =
-        Arc::new(ZfsImageStore::try_new(&root_dir, zfs_pool, registry_client).unwrap());
+    let sandboxer = {
+        let zfs_pool = ZfsPool::new("zroot");
+        let registry_client = Arc::new(ReqwestRegistryClient::new());
+        let root_dir = PathBuf::from("/tmp/runner");
+        let image_store =
+            Arc::new(ZfsImageStore::try_new(&root_dir, zfs_pool, registry_client).unwrap());
+        let bridge_if = "bridge0".to_string();
+        let num_slots = 10;
+        Arc::new(JailSandboxer::try_new(&root_dir, bridge_if, image_store, num_slots).unwrap())
+    };
 
-    let bridge_if = "bridge0".to_string();
-    let num_slots = 10;
-    let sandboxer =
-        Arc::new(JailSandboxer::try_new(&root_dir, bridge_if, image_store, num_slots).unwrap());
+    let secret_service = Arc::new(SecretService::new(HashMap::new()));
+
+    let evaluator_dir_root = PathBuf::from("/tmp/evaluators");
 
     let runner_state = Arc::new(RunnerState::new(
         cancellation_token,
@@ -49,6 +52,7 @@ async fn main() {
         assignment_capacity,
         sandboxer,
         secret_service,
+        evaluator_dir_root,
     ));
 
     let evaluator_scheduler_handle = EvaluatorScheduler::spawn(runner_state.clone());

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use http::Request;
@@ -33,6 +34,7 @@ pub struct RunnerState {
     assignment_capacity: SharedAssignmentCapacity,
     sandboxer: Arc<dyn Sandboxer>,
     secret_service: Arc<SecretService>,
+    evaluator_dir_root: PathBuf,
 }
 
 impl RunnerState {
@@ -44,6 +46,7 @@ impl RunnerState {
         assignment_capacity: SharedAssignmentCapacity,
         sandboxer: Arc<dyn Sandboxer>,
         secret_service: Arc<SecretService>,
+        evaluator_dir_root: PathBuf,
     ) -> Self {
         Self {
             cancellation_token,
@@ -53,6 +56,7 @@ impl RunnerState {
             assignment_capacity,
             sandboxer,
             secret_service,
+            evaluator_dir_root,
         }
     }
 

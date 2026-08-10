@@ -1,30 +1,22 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 
+use muzanci_git::GitBranch;
+use muzanci_git::GitClient;
+use muzanci_git::GitCommitSha;
 use muzanci_interpreter::Config;
 use muzanci_interpreter::GitCloneShowArgs;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
 use muzanci_transport::channel::EvaluatorMessage;
-use muzanci_transport::channel::ExitStatus;
 use muzanci_transport::channel::Message;
-use muzanci_transport::channel::ProcessOutput;
 use muzanci_transport::channel::TriggerId;
-use tokio::sync::mpsc;
+use url::Url;
 
 use crate::RunnerState;
 use crate::capacity::EvaluationCapacity;
-use crate::sandbox::Sandbox;
-use crate::sandbox::SandboxConfig;
-use crate::sandbox::SandboxId;
-use muzanci_image::image::ImagePlatform;
-use muzanci_image::image::ImagePlatformArchitecture;
-use muzanci_image::image::ImagePlatformOs;
-use muzanci_image::manifest_ref::ManifestRef;
-
-const INTERPRETER_BIN_BYTES: &[u8] = include_bytes!("../embed/interpreter");
 
 pub struct EvaluatorHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -92,19 +84,11 @@ impl Evaluator {
 
     async fn main(&mut self) -> anyhow::Result<()> {
         let args = self.start().await?;
-        // TODO: Detect runner host architecture.
-        let platform = ImagePlatform {
-            architecture: ImagePlatformArchitecture::ARM64,
-            os: ImagePlatformOs::FREEBSD,
-        };
-        let config = SandboxConfig {
-            sandbox_id: SandboxId::now_v7(),
-            manifest_ref: ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")?,
-            platform,
-        };
-        let sandbox = self.runner_state.sandboxer.create(config).await?;
-        match self.evaluate(sandbox.into(), args.clone()).await {
-            Ok(eval_result) => self.complete(eval_result).await,
+        match self
+            .evaluate(&args.url, &args.branch, &args.commit, &args.input)
+            .await
+        {
+            Ok(config) => self.complete(config).await,
             Err(e) => self.fail(e.to_string()).await,
         }
     }
@@ -130,66 +114,23 @@ impl Evaluator {
     }
 
     async fn evaluate(
-        &mut self,
-        sandbox: Arc<dyn Sandbox>,
-        args: GitCloneShowArgs,
+        &self,
+        url: &Url,
+        branch: &GitBranch,
+        commit: &GitCommitSha,
+        input: &Path,
     ) -> anyhow::Result<Config> {
-        let exec_path = PathBuf::from("./interpreter");
-        sandbox
-            .create_executable_file(&exec_path, INTERPRETER_BIN_BYTES.into())
-            .await?;
+        let evaluator_dir = tempfile::tempdir_in(&self.runner_state.evaluator_dir_root)?;
 
-        let config_path = PathBuf::from("./muzan.config.json");
-        let process_result = {
-            let (output_tx, output_rx) = mpsc::channel(1);
-            let output_handle = EvaluatorProcessOutput::spawn(
-                self.runner_state.clone(),
-                self.channel_tx.clone(),
-                self.trigger_id,
-                output_rx,
-            );
-            let args: String = args.into();
-            let command = format!(
-                "{} {} > {}",
-                exec_path.display(),
-                args,
-                config_path.display()
-            );
-            tracing::error!("Running command: [{}]", command);
-            let secrets = HashMap::new(); // TODO: Optionally add secrets for evaluator.
-            let process_handle = sandbox.run(&command, &secrets, output_tx);
-            let (process_result, _output_result) = tokio::join!(process_handle, output_handle);
-            process_result
-        };
-
-        let exit_status = match process_result?.code() {
-            Some(code) => ExitStatus::Code(code),
-            None => ExitStatus::Signal,
-        };
-
-        self.channel_tx
-            .send(Message::Evaluator(EvaluatorMessage::ProcessExitStatus {
-                runner_id: self.runner_state.runner_id,
-                trigger_id: self.trigger_id,
-                exit_status,
-            }))
-            .await?;
-
-        match exit_status {
-            ExitStatus::Code(code) if code == 0 => {
-                // Evaluator process completed successfully.
-            }
-            ExitStatus::Code(code) => {
-                anyhow::bail!("Evaluator exited with non-zero status code: {}", code);
-            }
-            ExitStatus::Signal => {
-                anyhow::bail!("Evaluator terminated by signal.");
-            }
+        {
+            let git_client = GitClient::try_default()?;
+            git_client.checkout_commit(url, branch, &evaluator_dir.path(), commit)?;
+            // git_client must be dropped here because it is not Send.
+            // TODO: Consider offloading to a tokio::task::spawn_blocking.
         }
 
-        let config_json = sandbox.read_file(&config_path).await?;
-        let config = serde_json::from_str(&config_json)?;
-        Ok(config)
+        let input = evaluator_dir.path().join(input);
+        Config::from_file(&input, &HashMap::new())
     }
 
     async fn complete(&mut self, config: Config) -> anyhow::Result<()> {
@@ -238,83 +179,5 @@ impl Evaluator {
 impl Drop for Evaluator {
     fn drop(&mut self) {
         self.runner_state.evaluation_capacity.restore(self.capacity);
-    }
-}
-
-pub struct EvaluatorProcessOutputHandle {
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl Future for EvaluatorProcessOutputHandle {
-    type Output = Result<(), tokio::task::JoinError>;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.handle).poll(cx)
-    }
-}
-
-pub struct EvaluatorProcessOutput {
-    runner_state: Arc<RunnerState>,
-    channel_tx: ChannelSender,
-    trigger_id: TriggerId,
-    output_rx: mpsc::Receiver<ProcessOutput>,
-}
-
-impl EvaluatorProcessOutput {
-    pub fn spawn(
-        runner_state: Arc<RunnerState>,
-        channel_tx: ChannelSender,
-        trigger_id: TriggerId,
-        output_rx: mpsc::Receiver<ProcessOutput>,
-    ) -> EvaluatorProcessOutputHandle {
-        let runner_state = runner_state.clone();
-        let handle = tokio::spawn(async move {
-            EvaluatorProcessOutput {
-                runner_state,
-                channel_tx,
-                trigger_id,
-                output_rx,
-            }
-            .run()
-            .await
-            .unwrap();
-        });
-        EvaluatorProcessOutputHandle { handle }
-    }
-
-    async fn run(&mut self) -> anyhow::Result<()> {
-        let cancellation_token = self.runner_state.cancellation_token.clone();
-        tokio::select! {
-            _ = cancellation_token.cancelled() => {
-                eprintln!("EvaluatorProcessOutput received cancellation signal.");
-                Ok(())
-            }
-
-            result = self.main() => {
-                result
-            }
-        }
-    }
-
-    async fn main(&mut self) -> anyhow::Result<()> {
-        while let Some(output) = self.output_rx.recv().await {
-            let result = self
-                .channel_tx
-                .send(Message::Evaluator(EvaluatorMessage::ProcessOutput {
-                    runner_id: self.runner_state.runner_id,
-                    trigger_id: self.trigger_id,
-                    output,
-                }))
-                .await;
-
-            if let Err(e) = result {
-                tracing::error!("Failed to send process output: {}", e);
-                anyhow::bail!("Failed to send process output: {}", e);
-            }
-        }
-        Ok(())
     }
 }
