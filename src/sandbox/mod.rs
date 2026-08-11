@@ -1,12 +1,11 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use tokio::sync::mpsc;
 
-use muzanci_transport::channel::ProcessOutput;
+use muzanci_transport::message::ProcessOutput;
 
 use muzanci_image::image::ImagePlatform;
 use muzanci_image::manifest_ref::ManifestRef;
@@ -41,10 +40,7 @@ where
         output_tx: mpsc::Sender<ProcessOutput>,
     ) -> Result<ExitStatus, SandboxError>;
 
-    async fn create_executable_file(&self, path: &Path, content: Bytes)
-    -> Result<(), SandboxError>;
-
-    async fn read_file(&self, path: &Path) -> Result<String, SandboxError>;
+    fn workspace_path(&self) -> PathBuf;
 
     fn config(&self) -> &SandboxConfig;
 }

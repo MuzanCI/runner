@@ -7,31 +7,33 @@ use tokio_util::sync::CancellationToken;
 use muzanci_transport::MUZANCI_RUNNER_ID_HEADER;
 use muzanci_transport::MUZANCI_TRANSPORT_V1;
 use muzanci_transport::channel::FnChannelAcceptor;
-use muzanci_transport::channel::RunnerId;
+use muzanci_transport::message::RunnerId;
 use muzanci_transport::mux::Mux;
 use muzanci_transport::mux::MuxHandle;
 
-use crate::capacity::SharedAssignmentCapacity;
-use crate::capacity::SharedEvaluationCapacity;
+use crate::assignment_capacity::SharedAssignmentCapacityHandle;
+use crate::evaluation_capacity::SharedEvaluationCapacity;
 use crate::sandbox::Sandboxer;
 use crate::secret::SecretService;
 
-pub mod capacity;
+pub mod assignment_capacity;
+pub mod evaluation_capacity;
 pub mod evaluator;
+pub mod evaluator_scheduler;
 pub mod logging;
 pub mod sandbox;
-pub mod scheduler;
 pub mod secret;
 pub mod signal_receiver;
 pub mod worker;
+pub mod worker_scheduler;
 
 #[derive(Clone)]
 pub struct RunnerState {
     cancellation_token: CancellationToken,
     runner_id: RunnerId,
     mux_handle: MuxHandle,
-    evaluation_capacity: SharedEvaluationCapacity,
-    assignment_capacity: SharedAssignmentCapacity,
+    shared_evaluation_capacity: SharedEvaluationCapacity,
+    shared_assignment_capacity_handle: SharedAssignmentCapacityHandle,
     sandboxer: Arc<dyn Sandboxer>,
     secret_service: Arc<SecretService>,
     evaluator_dir_root: PathBuf,
@@ -42,8 +44,8 @@ impl RunnerState {
         cancellation_token: CancellationToken,
         runner_id: RunnerId,
         mux_handle: MuxHandle,
-        evaluation_capacity: SharedEvaluationCapacity,
-        assignment_capacity: SharedAssignmentCapacity,
+        shared_evaluation_capacity: SharedEvaluationCapacity,
+        shared_assignment_capacity_handle: SharedAssignmentCapacityHandle,
         sandboxer: Arc<dyn Sandboxer>,
         secret_service: Arc<SecretService>,
         evaluator_dir_root: PathBuf,
@@ -52,8 +54,8 @@ impl RunnerState {
             cancellation_token,
             runner_id,
             mux_handle,
-            evaluation_capacity,
-            assignment_capacity,
+            shared_evaluation_capacity,
+            shared_assignment_capacity_handle,
             sandboxer,
             secret_service,
             evaluator_dir_root,

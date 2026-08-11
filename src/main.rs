@@ -4,15 +4,15 @@ use std::sync::Arc;
 
 use muzanci_image::reqwest_registry_client::ReqwestRegistryClient;
 use muzanci_runner::RunnerState;
-use muzanci_runner::capacity::SharedAssignmentCapacity;
-use muzanci_runner::capacity::SharedEvaluationCapacity;
+use muzanci_runner::assignment_capacity::SharedAssignmentCapacity;
+use muzanci_runner::evaluation_capacity::SharedEvaluationCapacity;
+use muzanci_runner::evaluator_scheduler::EvaluatorScheduler;
 use muzanci_runner::sandbox::jail_sandboxer::JailSandboxer;
 use muzanci_runner::sandbox::zfs_image_store::ZfsImageStore;
 use muzanci_runner::sandbox::zfs_image_store::ZfsPool;
-use muzanci_runner::scheduler::EvaluatorScheduler;
-use muzanci_runner::scheduler::WorkerScheduler;
 use muzanci_runner::secret::SecretService;
 use muzanci_runner::signal_receiver::SignalReceiver;
+use muzanci_runner::worker_scheduler::WorkerScheduler;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -27,7 +27,7 @@ async fn main() {
     tracing::info!("Assigned runner ID [{}]", runner_id);
 
     let evaluation_capacity = SharedEvaluationCapacity::new(10);
-    let assignment_capacity = SharedAssignmentCapacity::new(10);
+    let assignment_capacity = SharedAssignmentCapacity::spawn(10);
 
     let sandboxer = {
         let zfs_pool = ZfsPool::new("zroot");

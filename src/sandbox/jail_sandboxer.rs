@@ -397,7 +397,8 @@ impl Sandboxer for JailSandboxer {
         let jail_conf =
             self.create_jail(&config, slot.slot_id(), rootfs, sandbox_dir, zfs_quota)?;
 
-        let sandbox = JailSandbox::new(config, jail_conf, slot);
+        let sandbox = JailSandbox::try_new(config, jail_conf, slot)
+            .map_err(|e| SandboxerError(e.to_string()))?;
 
         Ok(Arc::new(sandbox))
     }

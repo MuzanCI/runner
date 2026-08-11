@@ -1,26 +1,28 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::join;
+use tokio::sync::mpsc;
 
+use muzanci_git::GitClient;
+use muzanci_image::image::ImagePlatform;
+use muzanci_image::manifest_ref::ManifestRef;
 use muzanci_interpreter::StepConfig;
 use muzanci_interpreter::StepId;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
-use muzanci_transport::channel::ExitStatus;
-use muzanci_transport::channel::Message;
-use muzanci_transport::channel::ProcessOutput;
-use muzanci_transport::channel::TaskId;
-use muzanci_transport::channel::WorkerMessage;
-use tokio::join;
-use tokio::sync::mpsc;
+use muzanci_transport::message::ExitStatus;
+use muzanci_transport::message::Message;
+use muzanci_transport::message::ProcessOutput;
+use muzanci_transport::message::TaskConfig;
+use muzanci_transport::message::TaskId;
+use muzanci_transport::message::WorkerMessage;
 
 use crate::RunnerState;
-use crate::capacity::AssignmentCapacity;
+use crate::assignment_capacity::AssignmentCapacityPermit;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
 use crate::sandbox::SandboxId;
-use muzanci_image::image::ImagePlatform;
-use muzanci_image::manifest_ref::ManifestRef;
 
 pub struct WorkerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -42,9 +44,9 @@ pub struct Worker {
     channel_tx: ChannelSender,
     channel_rx: ChannelReceiver,
     task_id: TaskId,
-    capacity: AssignmentCapacity,
     manifest_ref: ManifestRef,
     platform: ImagePlatform,
+    _permit: AssignmentCapacityPermit,
 }
 
 enum StepResult {
@@ -56,9 +58,9 @@ impl Worker {
     pub fn spawn(
         runner_state: Arc<RunnerState>,
         task_id: TaskId,
-        capacity: AssignmentCapacity,
         manifest_ref: ManifestRef,
         platform: ImagePlatform,
+        permit: AssignmentCapacityPermit,
     ) -> WorkerHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
@@ -72,9 +74,9 @@ impl Worker {
                 channel_tx,
                 channel_rx,
                 task_id,
-                capacity,
                 manifest_ref,
                 platform,
+                _permit: permit,
             }
             .run()
             .await
@@ -98,17 +100,26 @@ impl Worker {
     }
 
     async fn main(&mut self) -> anyhow::Result<()> {
-        let steps = self.start().await?;
-        let config = SandboxConfig {
+        let task_config = self.start().await?;
+        let sandbox_config = SandboxConfig {
             sandbox_id: SandboxId::now_v7(),
             manifest_ref: self.manifest_ref.clone(),
             platform: self.platform.clone(),
         };
         let sandbox: Arc<dyn Sandbox> = {
-            let sandbox = self.runner_state.sandboxer.create(config).await?;
+            let sandbox = self.runner_state.sandboxer.create(sandbox_config).await?;
             Arc::from(sandbox)
         };
-        for step in steps {
+        {
+            let git_client = GitClient::try_default()?;
+            git_client.checkout_commit(
+                &task_config.checkout_config.url,
+                &task_config.checkout_config.branch,
+                &sandbox.workspace_path(),
+                &task_config.checkout_config.commit_sha,
+            )?;
+        }
+        for step in task_config.steps {
             match self.run_step(sandbox.clone(), step).await? {
                 StepResult::Continue => {
                     continue;
@@ -124,7 +135,7 @@ impl Worker {
         self.complete().await
     }
 
-    async fn start(&mut self) -> anyhow::Result<Vec<StepConfig>> {
+    async fn start(&mut self) -> anyhow::Result<TaskConfig> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::StartRequest {
                 runner_id: self.runner_state.runner_id,
@@ -316,12 +327,6 @@ impl Worker {
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
-    }
-}
-
-impl Drop for Worker {
-    fn drop(&mut self) {
-        self.runner_state.assignment_capacity.restore(self.capacity);
     }
 }
 

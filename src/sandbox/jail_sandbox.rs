@@ -1,22 +1,21 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitStatus;
 
-use bytes::Bytes;
 use futures_util::StreamExt;
-use muzanci_transport::channel::ProcessOutput;
-use std::os::unix::fs::PermissionsExt;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio_util::codec::FramedRead;
 use tokio_util::codec::LinesCodec;
+
+use muzanci_image::image::ImagePlatformOs;
+use muzanci_transport::message::ProcessOutput;
 
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
 use crate::sandbox::SandboxError;
 use crate::sandbox::jail_config::JailConfig;
 use crate::sandbox::jail_slot::JailSlot;
-use muzanci_image::image::ImagePlatformOs;
 
 pub struct JailSandbox {
     config: SandboxConfig,
@@ -27,12 +26,19 @@ pub struct JailSandbox {
 }
 
 impl JailSandbox {
-    pub fn new(config: SandboxConfig, jail_conf: JailConfig, slot: JailSlot) -> Self {
-        JailSandbox {
+    pub fn try_new(
+        config: SandboxConfig,
+        jail_conf: JailConfig,
+        slot: JailSlot,
+    ) -> Result<Self, SandboxError> {
+        let sandbox = JailSandbox {
             config,
             jail_conf,
             _slot: slot,
-        }
+        };
+        std::fs::create_dir_all(&sandbox.workspace_path())
+            .map_err(|e| SandboxError(e.to_string()))?;
+        Ok(sandbox)
     }
 }
 
@@ -42,6 +48,13 @@ impl Sandbox for JailSandbox {
         &self.config
     }
 
+    fn workspace_path(&self) -> PathBuf {
+        match &self.config.platform.os {
+            ImagePlatformOs::LINUX => self.jail_conf.path().join("compat/linux/workspace"),
+            _ => self.jail_conf.path().join("workspace"),
+        }
+    }
+
     async fn run(
         &self,
         cmd_str: &str,
@@ -49,8 +62,14 @@ impl Sandbox for JailSandbox {
         output_tx: mpsc::Sender<ProcessOutput>,
     ) -> Result<ExitStatus, SandboxError> {
         let cmd_str = match &self.config.platform.os {
-            ImagePlatformOs::LINUX => format!("chroot /compat/linux {}", cmd_str),
-            ImagePlatformOs::FREEBSD => cmd_str.to_string(),
+            ImagePlatformOs::LINUX => format!(
+                "chroot /compat/linux sh -c \"cd {} && {}\"",
+                self.workspace_path().display(),
+                cmd_str
+            ),
+            ImagePlatformOs::FREEBSD => {
+                format!("cd {} && {}", self.workspace_path().display(), cmd_str)
+            }
             ImagePlatformOs::OTHER(os) => {
                 return Err(SandboxError(format!("unsupported os [{}]", os)));
             }
@@ -124,36 +143,5 @@ impl Sandbox for JailSandbox {
             .map_err(|e| SandboxError(e.to_string()))?;
 
         Ok(exit_status)
-    }
-
-    async fn create_executable_file(
-        &self,
-        path: &Path,
-        content: Bytes,
-    ) -> Result<(), SandboxError> {
-        let path = self.jail_conf.path().join(path);
-        tokio::fs::write(&path, content)
-            .await
-            .map_err(|e| SandboxError(e.to_string()))?;
-
-        {
-            let mut permissions = tokio::fs::metadata(&path)
-                .await
-                .map_err(|e| SandboxError(e.to_string()))?
-                .permissions();
-            permissions.set_mode(0o700);
-            tokio::fs::set_permissions(&path, permissions)
-                .await
-                .map_err(|e| SandboxError(e.to_string()))?;
-        }
-        Ok(())
-    }
-
-    async fn read_file(&self, path: &Path) -> Result<String, SandboxError> {
-        let path = self.jail_conf.path().join(path);
-        let content = tokio::fs::read_to_string(path)
-            .await
-            .map_err(|e| SandboxError(e.to_string()))?;
-        Ok(content)
     }
 }

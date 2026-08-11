@@ -1,22 +1,23 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use url::Url;
 
 use muzanci_git::GitBranch;
 use muzanci_git::GitClient;
 use muzanci_git::GitCommitSha;
 use muzanci_interpreter::Config;
-use muzanci_interpreter::GitCloneShowArgs;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
-use muzanci_transport::channel::EvaluatorMessage;
-use muzanci_transport::channel::Message;
-use muzanci_transport::channel::TriggerId;
-use url::Url;
+use muzanci_transport::message::EvaluationConfig;
+use muzanci_transport::message::EvaluatorMessage;
+use muzanci_transport::message::Message;
+use muzanci_transport::message::TriggerId;
 
 use crate::RunnerState;
-use crate::capacity::EvaluationCapacity;
+use crate::evaluation_capacity::EvaluationCapacity;
+use crate::evaluation_capacity::EvaluationCapacityPermit;
 
 pub struct EvaluatorHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -39,6 +40,7 @@ pub struct Evaluator {
     channel_rx: ChannelReceiver,
     trigger_id: TriggerId,
     capacity: EvaluationCapacity,
+    _permit: EvaluationCapacityPermit,
 }
 
 impl Evaluator {
@@ -46,6 +48,7 @@ impl Evaluator {
         runner_state: Arc<RunnerState>,
         trigger_id: TriggerId,
         capacity: EvaluationCapacity,
+        permit: EvaluationCapacityPermit,
     ) -> EvaluatorHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
@@ -60,6 +63,7 @@ impl Evaluator {
                 channel_rx,
                 trigger_id,
                 capacity,
+                _permit: permit,
             }
             .run()
             .await
@@ -83,9 +87,14 @@ impl Evaluator {
     }
 
     async fn main(&mut self) -> anyhow::Result<()> {
-        let args = self.start().await?;
+        let config = self.start().await?;
         match self
-            .evaluate(&args.url, &args.branch, &args.commit, &args.input)
+            .evaluate(
+                &config.checkout.url,
+                &config.checkout.branch,
+                &config.checkout.commit_sha,
+                &config.input,
+            )
             .await
         {
             Ok(config) => self.complete(config).await,
@@ -93,7 +102,7 @@ impl Evaluator {
         }
     }
 
-    async fn start(&mut self) -> anyhow::Result<GitCloneShowArgs> {
+    async fn start(&mut self) -> anyhow::Result<EvaluationConfig> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::StartRequest {
                 runner_id: self.runner_state.runner_id,
@@ -178,6 +187,8 @@ impl Evaluator {
 
 impl Drop for Evaluator {
     fn drop(&mut self) {
-        self.runner_state.evaluation_capacity.restore(self.capacity);
+        self.runner_state
+            .shared_evaluation_capacity
+            .restore(self.capacity);
     }
 }
