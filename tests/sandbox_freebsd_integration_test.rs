@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use muzanci_image::image::ImagePlatform;
 use muzanci_image::image::ImagePlatformArchitecture;
 use muzanci_image::image::ImagePlatformOs;
-use muzanci_transport::channel::ProcessOutput;
-use tokio::sync::mpsc;
-use uuid::Uuid;
-
 use muzanci_image::manifest_ref::ManifestRef;
 use muzanci_image::reqwest_registry_client::ReqwestRegistryClient;
 use muzanci_runner::sandbox::SandboxConfig;
@@ -16,6 +14,7 @@ use muzanci_runner::sandbox::Sandboxer;
 use muzanci_runner::sandbox::jail_sandboxer::JailSandboxer;
 use muzanci_runner::sandbox::zfs_image_store::ZfsImageStore;
 use muzanci_runner::sandbox::zfs_image_store::ZfsPool;
+use muzanci_transport::message::ProcessOutput;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

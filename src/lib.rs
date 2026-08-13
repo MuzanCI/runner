@@ -24,6 +24,7 @@ pub mod logging;
 pub mod sandbox;
 pub mod secret;
 pub mod signal_receiver;
+pub mod ssh;
 pub mod worker;
 pub mod worker_scheduler;
 

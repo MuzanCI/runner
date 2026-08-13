@@ -2,3 +2,4 @@
 /embed
 /sandboxes
 .env
+.DS_Store

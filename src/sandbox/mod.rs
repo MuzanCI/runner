@@ -10,6 +10,8 @@ use muzanci_transport::message::ProcessOutput;
 use muzanci_image::image::ImagePlatform;
 use muzanci_image::manifest_ref::ManifestRef;
 
+pub mod fake_sandbox;
+pub mod fake_sandboxer;
 pub mod jail_config;
 pub mod jail_sandbox;
 pub mod jail_sandboxer;

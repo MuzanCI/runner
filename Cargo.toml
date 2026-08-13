@@ -21,9 +21,9 @@ http-body-util = "0.1.3"
 bytes = "1.11.1"
 futures = "0.3.32"
 uuid = { version = "1.23.3", features = ["v7"] }
-russh = { version = "0.61.2"}
+russh = { version = "0.62.6"}
 russh-keys = "0.49.2"
-nix = { version = "0.31.3", features = ["term"] }
+nix = { version = "0.31.3", features = ["fs", "term"] }
 rand = "0.10.1"
 tempfile = "3.24.0"
 tokio-util = "0.7.18"
@@ -46,6 +46,7 @@ tokio-tar = "0.3.1"
 futures-util = "0.3.33"
 strum = { version = "0.28.0", features = ["derive", "strum_macros"] }
 serde_with = "3.21.0"
+libc = "0.2.189"
 
 [lib]
 name = "muzanci_runner"

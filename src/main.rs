@@ -7,6 +7,7 @@ use muzanci_runner::RunnerState;
 use muzanci_runner::assignment_capacity::SharedAssignmentCapacity;
 use muzanci_runner::evaluation_capacity::SharedEvaluationCapacity;
 use muzanci_runner::evaluator_scheduler::EvaluatorScheduler;
+use muzanci_runner::sandbox::fake_sandboxer::FakeSandboxer;
 use muzanci_runner::sandbox::jail_sandboxer::JailSandboxer;
 use muzanci_runner::sandbox::zfs_image_store::ZfsImageStore;
 use muzanci_runner::sandbox::zfs_image_store::ZfsPool;
@@ -29,16 +30,17 @@ async fn main() {
     let evaluation_capacity = SharedEvaluationCapacity::new(10);
     let assignment_capacity = SharedAssignmentCapacity::spawn(10);
 
-    let sandboxer = {
-        let zfs_pool = ZfsPool::new("zroot");
-        let registry_client = Arc::new(ReqwestRegistryClient::new());
-        let root_dir = PathBuf::from("/tmp/runner");
-        let image_store =
-            Arc::new(ZfsImageStore::try_new(&root_dir, zfs_pool, registry_client).unwrap());
-        let bridge_if = "bridge0".to_string();
-        let num_slots = 10;
-        Arc::new(JailSandboxer::try_new(&root_dir, bridge_if, image_store, num_slots).unwrap())
-    };
+    // let sandboxer = {
+    //     let zfs_pool = ZfsPool::new("zroot");
+    //     let registry_client = Arc::new(ReqwestRegistryClient::new());
+    //     let root_dir = PathBuf::from("/tmp/runner");
+    //     let image_store =
+    //         Arc::new(ZfsImageStore::try_new(&root_dir, zfs_pool, registry_client).unwrap());
+    //     let bridge_if = "bridge0".to_string();
+    //     let num_slots = 10;
+    //     Arc::new(JailSandboxer::try_new(&root_dir, bridge_if, image_store, num_slots).unwrap())
+    // };
+    let sandboxer = Arc::new(FakeSandboxer::new());
 
     let secret_service = Arc::new(SecretService::new(HashMap::new()));
 
