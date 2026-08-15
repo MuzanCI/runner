@@ -5,6 +5,7 @@ use std::sync::Arc;
 use muzanci_image::reqwest_registry_client::ReqwestRegistryClient;
 use muzanci_runner::RunnerState;
 use muzanci_runner::assignment_capacity::SharedAssignmentCapacity;
+use muzanci_runner::debugger_scheduler::DebuggerScheduler;
 use muzanci_runner::evaluation_capacity::SharedEvaluationCapacity;
 use muzanci_runner::evaluator_scheduler::EvaluatorScheduler;
 use muzanci_runner::sandbox::fake_sandboxer::FakeSandboxer;
@@ -60,13 +61,13 @@ async fn main() {
     let evaluator_scheduler_handle = EvaluatorScheduler::spawn(runner_state.clone());
     let worker_scheduler_handle = WorkerScheduler::spawn(runner_state.clone());
     let signal_receiver_handle = SignalReceiver::spawn(runner_state.clone());
-    // let debugger_scheduler_handle = DebuggerScheduler::spawn(runner_state.clone());
+    let debugger_scheduler_handle = DebuggerScheduler::spawn(runner_state.clone());
 
     // TODO: Add cancellation token for graceful shutdown.
     let _ = tokio::join!(
         evaluator_scheduler_handle,
         worker_scheduler_handle,
         signal_receiver_handle,
-        // debugger_scheduler_handle
+        debugger_scheduler_handle
     );
 }
