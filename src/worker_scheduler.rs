@@ -112,6 +112,7 @@ impl WorkerScheduler {
                 }
             }
 
+            // TODO: Fix bug where scheduler does not check server again, even if capacity is available.
             // Wait for notification of available capacity before checking for tasks again.
             self.runner_state
                 .shared_assignment_capacity_handle

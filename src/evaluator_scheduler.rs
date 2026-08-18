@@ -112,6 +112,7 @@ impl EvaluatorScheduler {
                 }
             }
 
+            // TODO: Fix bug where scheduler does not check server again, even if capacity is available.
             // Wait for notification of available capacity before checking for triggers again.
             self.runner_state
                 .shared_evaluation_capacity

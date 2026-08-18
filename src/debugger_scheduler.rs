@@ -80,7 +80,7 @@ impl DebuggerScheduler {
         loop {
             let debugs = self.fetch_waiting_debugs().await?;
 
-            // Iterate over tasks and attempt to reserve until capacity is reached or no more tasks are available.
+            // Iterate over debugs and attempt to reserve until capacity is reached or no more debugs are available.
             for waiting_debug in debugs {
                 let permit = match self
                     .runner_state
@@ -117,6 +117,10 @@ impl DebuggerScheduler {
             }
 
             // Wait for notification of available capacity before checking for waiting debugs again.
+            tracing::info!(
+                "Waiting for available capacity before checking for waiting debugs again."
+            );
+            // TODO: Fix bug where scheduler does not check server again, even if capacity is available.
             self.runner_state
                 .shared_assignment_capacity_handle
                 .notified()
