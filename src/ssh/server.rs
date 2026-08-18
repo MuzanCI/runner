@@ -18,16 +18,140 @@ use russh::server::Handler;
 use russh::server::Session;
 use std::sync::Arc;
 
-pub struct NativePtyNix {
-    pub master: AsyncFd<OwnedFd>,
+pub struct ServerHandler {
+    jid: String,
+    cols: u16,
+    rows: u16,
+    pty: Option<Arc<Pty>>,
 }
 
-impl NativePtyNix {
-    pub fn spawn(
-        mut cmd: Command,
-        cols: u16,
-        rows: u16,
-    ) -> io::Result<(Self, std::process::Child)> {
+impl ServerHandler {
+    pub fn new(jid: String) -> Self {
+        Self {
+            jid,
+            cols: 80,
+            rows: 24,
+            pty: None,
+        }
+    }
+}
+
+impl Handler for ServerHandler {
+    type Error = russh::Error;
+
+    async fn auth_none(&mut self, _username: &str) -> Result<russh::server::Auth, Self::Error> {
+        Ok(russh::server::Auth::Accept)
+    }
+
+    // async fn auth_publickey(
+    //     &mut self,
+    //     _username: &str,
+    //     _public_key: &russh::keys::PublicKey,
+    // ) -> Result<russh::server::Auth, Self::Error> {
+    //     Ok(russh::server::Auth::Accept)
+    // }
+    //
+    async fn channel_open_session(
+        &mut self,
+        channel: russh::Channel<russh::server::Msg>,
+        reply: russh::server::ChannelOpenHandle,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        reply.accept().await;
+        Ok(())
+    }
+
+    async fn pty_request(
+        &mut self,
+        _channel: ChannelId,
+        _term: &str,
+        col_width: u32,
+        row_height: u32,
+        _pix_width: u32,
+        _pix_height: u32,
+        _modes: &[(russh::Pty, u32)],
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.cols = col_width as u16;
+        self.rows = row_height as u16;
+        Ok(())
+    }
+
+    async fn window_change_request(
+        &mut self,
+        _channel: ChannelId,
+        col_width: u32,
+        row_height: u32,
+        _pix_width: u32,
+        _pix_height: u32,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.cols = col_width as u16;
+        self.rows = row_height as u16;
+
+        if let Some(ref pty) = self.pty {
+            let _ = pty.resize(self.cols, self.rows);
+        }
+        Ok(())
+    }
+
+    async fn shell_request(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // TODO: Construct jexec command for FreeBSD Jail execution
+        let cmd = std::process::Command::new("sh");
+
+        // Spawn child process with PTY
+        let (pty, mut child) = match Pty::spawn(cmd, self.cols, self.rows) {
+            Ok(res) => res,
+            Err(_) => {
+                return Err(russh::Error::IO(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "failed to spawn PTY",
+                )));
+            }
+        };
+
+        let pty_arc = Arc::new(pty);
+        self.pty = Some(Arc::clone(&pty_arc));
+        let handle = session.handle();
+
+        // Spawn I/O forwarding task on Tokio runtime
+        tokio::spawn(async move {
+            let _ = read_pty_to_channel(&pty_arc, channel, handle.clone()).await;
+
+            // Retrieve child process exit code
+            let status = child.wait().map(|s| s.code().unwrap_or(1)).unwrap_or(1);
+            let _ = handle.exit_status_request(channel, status as u32).await;
+            let _ = handle.close(channel).await;
+        });
+
+        Ok(())
+    }
+
+    async fn data(
+        &mut self,
+        _channel: ChannelId,
+        data: &[u8],
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if let Some(ref pty) = self.pty {
+            write_channel_to_pty(pty, data)
+                .await
+                .map_err(|e| russh::Error::from(e))?;
+        }
+        Ok(())
+    }
+}
+
+struct Pty {
+    master: AsyncFd<OwnedFd>,
+}
+
+impl Pty {
+    fn spawn(mut cmd: Command, cols: u16, rows: u16) -> io::Result<(Self, std::process::Child)> {
         let winsize = Winsize {
             ws_row: rows,
             ws_col: cols,
@@ -74,7 +198,7 @@ impl NativePtyNix {
     }
 
     /// Resize the window dimensions using system ioctl
-    pub fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
+    fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
         let winsize = Winsize {
             ws_row: rows,
             ws_col: cols,
@@ -101,8 +225,8 @@ impl NativePtyNix {
 }
 
 /// Reads PTY master output asynchronously without blocking the Tokio reactor thread
-pub async fn read_pty_to_channel(
-    pty: &NativePtyNix,
+async fn read_pty_to_channel(
+    pty: &Pty,
     channel: russh::ChannelId,
     handle: russh::server::Handle,
 ) -> io::Result<()> {
@@ -130,7 +254,7 @@ pub async fn read_pty_to_channel(
 }
 
 /// Writes incoming SSH channel client data directly into master PTY
-pub async fn write_channel_to_pty(pty: &NativePtyNix, data: &[u8]) -> io::Result<()> {
+async fn write_channel_to_pty(pty: &Pty, data: &[u8]) -> io::Result<()> {
     let mut written = 0;
     while written < data.len() {
         // Standard Write trait on OwnedFd
@@ -152,109 +276,4 @@ pub async fn write_channel_to_pty(pty: &NativePtyNix, data: &[u8]) -> io::Result
         written += n;
     }
     Ok(())
-}
-
-pub struct NixJailServerHandler {
-    pub jid: String,
-    pub cols: u16,
-    pub rows: u16,
-    pub pty: Option<Arc<NativePtyNix>>,
-}
-
-impl NixJailServerHandler {
-    pub fn new(jid: String) -> Self {
-        Self {
-            jid,
-            cols: 80,
-            rows: 24,
-            pty: None,
-        }
-    }
-}
-
-impl Handler for NixJailServerHandler {
-    type Error = russh::Error;
-
-    async fn pty_request(
-        &mut self,
-        _channel: ChannelId,
-        _term: &str,
-        col_width: u32,
-        row_height: u32,
-        _pix_width: u32,
-        _pix_height: u32,
-        _modes: &[(russh::Pty, u32)],
-        _session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        self.cols = col_width as u16;
-        self.rows = row_height as u16;
-        Ok(())
-    }
-
-    async fn window_change_request(
-        &mut self,
-        _channel: ChannelId,
-        col_width: u32,
-        row_height: u32,
-        _pix_width: u32,
-        _pix_height: u32,
-        _session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        self.cols = col_width as u16;
-        self.rows = row_height as u16;
-
-        if let Some(ref pty) = self.pty {
-            let _ = pty.resize(self.cols, self.rows);
-        }
-        Ok(())
-    }
-
-    async fn shell_request(
-        &mut self,
-        channel: ChannelId,
-        session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        // Construct jexec command for FreeBSD Jail execution
-        let mut cmd = std::process::Command::new("jexec");
-        cmd.arg(&self.jid).arg("sh");
-
-        // Spawn Native PTY using nix abstractions
-        let (pty, mut child) = match NativePtyNix::spawn(cmd, self.cols, self.rows) {
-            Ok(res) => res,
-            Err(_) => {
-                return Err(russh::Error::IO(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "failed to spawn PTY",
-                )));
-            }
-        };
-
-        let pty_arc = Arc::new(pty);
-        self.pty = Some(Arc::clone(&pty_arc));
-        let handle = session.handle();
-
-        // Spawn I/O forwarding task on Tokio runtime
-        tokio::spawn(async move {
-            let _ = read_pty_to_channel(&pty_arc, channel, handle.clone()).await;
-
-            // Retrieve child process exit code
-            let status = child.wait().map(|s| s.code().unwrap_or(1)).unwrap_or(1);
-            let _ = handle.exit_status_request(channel, status as u32).await;
-            let _ = handle.close(channel).await;
-        });
-
-        Ok(())
-    }
-
-    async fn data(
-        &mut self,
-        _channel: ChannelId,
-        data: &[u8],
-        _session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        if let Some(ref pty) = self.pty {
-            let _ = write_channel_to_pty(pty, data);
-        }
-        Ok(())
-    }
 }

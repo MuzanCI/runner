@@ -19,6 +19,7 @@ use crate::secret::SecretService;
 pub mod assignment_capacity;
 pub mod debugger;
 pub mod debugger_scheduler;
+pub mod debugger_tunnel;
 pub mod evaluation_capacity;
 pub mod evaluator;
 pub mod evaluator_scheduler;

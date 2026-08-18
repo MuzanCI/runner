@@ -6,6 +6,7 @@ use sha2::Sha256;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::oneshot;
 use tracing::instrument;
 use url::Url;
 
@@ -21,6 +22,7 @@ use muzanci_transport::message::Message;
 
 use crate::RunnerState;
 use crate::assignment_capacity::AssignmentCapacityPermit;
+use crate::debugger_tunnel::DebuggerTunnel;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
 use crate::sandbox::SandboxId;
@@ -164,7 +166,9 @@ impl Debugger {
                 self.handle_complete_diff_upload_request(checksum).await
             }
             DebugClientMessage::ApplyDiffRequest => self.handle_apply_diff_request().await,
-            DebugClientMessage::StartShellRequest => self.handle_start_shell_request().await,
+            DebugClientMessage::StartShellRequest { step } => {
+                self.handle_start_shell_request(step).await
+            }
             DebugClientMessage::ExecuteStepRequest { step } => {
                 self.handle_execute_step_request(step).await
             }
@@ -357,8 +361,8 @@ impl Debugger {
         Ok(())
     }
 
-    async fn handle_start_shell_request(&mut self) -> anyhow::Result<()> {
-        let result = self.start_shell().await.map_err(|e| e.to_string());
+    async fn handle_start_shell_request(&mut self, step: StepConfig) -> anyhow::Result<()> {
+        let result = self.start_shell(step).await.map_err(|e| e.to_string());
         self.channel_tx
             .send(Message::DebugClient(
                 DebugClientMessage::StartShellResponse { result },
@@ -368,8 +372,18 @@ impl Debugger {
         Ok(())
     }
 
-    async fn start_shell(&mut self) -> anyhow::Result<()> {
-        anyhow::bail!("not_implemented")
+    async fn start_shell(&mut self, step: StepConfig) -> anyhow::Result<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+
+        DebuggerTunnel::spawn(
+            self.runner_state.mux_handle.clone(),
+            self.runner_state.cancellation_token(),
+            self.debug_id,
+            reply_tx,
+        );
+
+        let () = reply_rx.await?;
+        Ok(())
     }
 
     async fn handle_execute_step_request(&mut self, step: StepConfig) -> anyhow::Result<()> {
