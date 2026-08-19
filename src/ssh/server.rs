@@ -1,10 +1,13 @@
 use bytes::Bytes;
+use russh::CryptoVec;
+use std::collections::HashMap;
 use std::io;
 use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
 use std::os::fd::OwnedFd;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
+use std::sync::Mutex;
 use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 
@@ -23,6 +26,7 @@ pub struct ServerHandler {
     cols: u16,
     rows: u16,
     pty: Option<Arc<Pty>>,
+    processes: Arc<Mutex<HashMap<russh::ChannelId, u32>>>,
 }
 
 impl ServerHandler {
@@ -32,6 +36,7 @@ impl ServerHandler {
             cols: 80,
             rows: 24,
             pty: None,
+            processes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -92,6 +97,129 @@ impl Handler for ServerHandler {
         if let Some(ref pty) = self.pty {
             let _ = pty.resize(self.cols, self.rows);
         }
+        Ok(())
+    }
+
+    async fn signal(
+        &mut self,
+        channel: ChannelId,
+        signal_name: russh::Sig,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let processes = self
+            .processes
+            .lock()
+            .expect("SSH server handler processes lock is poisoned");
+        if let Some(&pid) = processes.get(&channel) {
+            let sig_num = match signal_name {
+                russh::Sig::INT => libc::SIGINT,
+                russh::Sig::TERM => libc::SIGTERM,
+                russh::Sig::KILL => libc::SIGKILL,
+                russh::Sig::QUIT => libc::SIGQUIT,
+                _ => libc::SIGINT,
+            };
+            unsafe {
+                libc::kill(pid as i32, sig_num);
+            }
+        }
+        Ok(())
+    }
+
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let command_str = match std::str::from_utf8(data) {
+            Ok(s) => s,
+            Err(_) => {
+                session.request_failure();
+                return Ok(());
+            }
+        };
+
+        // 1. Confirm to client that the exec request was accepted
+        session.request_success();
+
+        // 2. Spawn the child shell process
+        let mut child = match Command::new("sh")
+            .arg("-c")
+            .arg(command_str)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => {
+                let _ = session.exit_status_request(channel, 127);
+                let _ = session.close(channel);
+                return Ok(());
+            }
+        };
+
+        // 3. Track PID for signal forwarding
+        {
+            let mut processes = self
+                .processes
+                .lock()
+                .expect("SSH server handler processes lock is poisoned");
+            processes.insert(channel, child.id());
+        }
+
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+
+        let handle = session.handle();
+        let processes_mutex = self.processes.clone();
+
+        // 4. Stream I/O in a background Tokio task
+        tokio::spawn(async move {
+            use std::io::Read;
+            let handle_out = handle.clone();
+            let stdout_task = tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = stdout.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    let _ = handle_out.data(channel, Vec::from(&buf[..n])).await;
+                }
+            });
+
+            let handle_err = handle.clone();
+            let stderr_task = tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = stderr.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    let _ = handle_err
+                        .extended_data(channel, 1, Vec::from(&buf[..n]))
+                        .await;
+                }
+            });
+
+            // Wait for stdout/stderr readers and process completion
+            let _ = tokio::join!(stdout_task, stderr_task);
+
+            let exit_code = match child.wait() {
+                Ok(status) => status.code().unwrap_or(128) as u32,
+                Err(_) => 1,
+            };
+
+            // 5. Send exit code and close channel
+            let _ = handle.exit_status_request(channel, exit_code).await;
+            let _ = handle.close(channel).await;
+
+            // Remove process entry
+            //             let mut processes = self
+            let mut processes = processes_mutex
+                .lock()
+                .expect("SSH server handler processes lock is poisoned");
+            processes.remove(&channel);
+        });
+
         Ok(())
     }
 
