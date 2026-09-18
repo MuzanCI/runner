@@ -81,7 +81,7 @@ pub async fn connect(
 
     let request = Request::builder()
         .method("POST")
-        .uri("/runner/register")
+        .uri("/register_runner")
         .header(http::header::HOST, hostname)
         .header(http::header::CONNECTION, "Upgrade")
         .header(http::header::UPGRADE, MUZANCI_TRANSPORT_V1)

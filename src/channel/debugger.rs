@@ -122,6 +122,7 @@ impl Debugger {
         }
     }
 
+    #[tracing::instrument(skip_all)]
     async fn connect_debugger(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Debugger(DebuggerMessage::ConnectDebuggerRequest {
@@ -141,6 +142,7 @@ impl Debugger {
             })
     }
 
+    #[tracing::instrument(skip_all)]
     async fn handle_message(&mut self, message: Message) -> anyhow::Result<()> {
         let message = match message {
             Message::DebugClient(msg) => msg,
@@ -167,13 +169,11 @@ impl Debugger {
             DebugClientMessage::StartShellRequest { step } => {
                 self.handle_start_shell_request(step).await
             }
-            DebugClientMessage::ExecuteStepRequest { step } => {
-                self.handle_execute_step_request(step).await
-            }
             _ => Err(DebuggerError(format!("unexpected message: {:?}", message)))?,
         }
     }
 
+    #[tracing::instrument(skip_all)]
     async fn handle_create_sandbox_request(&mut self, image: ImageConfig) -> anyhow::Result<()> {
         let result = self.create_sandbox(image).await.map_err(|e| e.to_string());
 
@@ -186,6 +186,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn create_sandbox(&mut self, image: ImageConfig) -> anyhow::Result<()> {
         let sandbox_config = SandboxConfig {
             sandbox_id: SandboxId::now_v7(),
@@ -204,6 +205,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn handle_checkout_branch_request(
         &self,
         url: Url,
@@ -223,6 +225,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn checkout_branch(&self, url: Url, branch: GitBranch) -> anyhow::Result<()> {
         let sandbox = self
             .sandbox
@@ -243,6 +246,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn handle_start_diff_upload_request(&mut self) -> anyhow::Result<()> {
         let result = self.start_diff_upload().await.map_err(|e| e.to_string());
 
@@ -255,12 +259,14 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn start_diff_upload(&mut self) -> anyhow::Result<()> {
         self.diff_file = Some(NamedTempFile::new()?);
         self.diff_hasher = Some(Sha256::new());
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn handle_upload_diff_chunk_request(&mut self, chunk: Vec<u8>) -> anyhow::Result<()> {
         let result = self
             .upload_diff_chunk(chunk)
@@ -275,6 +281,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn upload_diff_chunk(&mut self, chunk: Vec<u8>) -> anyhow::Result<()> {
         {
             let diff_hasher = self
@@ -297,6 +304,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn handle_complete_diff_upload_request(
         &mut self,
         checksum: String,
@@ -314,6 +322,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn complete_diff_upload(&mut self, checksum: String) -> anyhow::Result<()> {
         let diff_hasher = self
             .diff_hasher
@@ -328,6 +337,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn handle_apply_diff_request(&self) -> anyhow::Result<()> {
         let result = self.apply_diff().await.map_err(|e| e.to_string());
         self.channel_tx
@@ -339,6 +349,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn apply_diff(&self) -> anyhow::Result<()> {
         let sandbox = self
             .sandbox
@@ -358,6 +369,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn handle_start_shell_request(&self, step: StepConfig) -> anyhow::Result<()> {
         let result = self.start_shell(step).await.map_err(|e| e.to_string());
         self.channel_tx
@@ -369,6 +381,7 @@ impl Debugger {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn start_shell(&self, step: StepConfig) -> anyhow::Result<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -381,20 +394,5 @@ impl Debugger {
 
         let () = reply_rx.await?;
         Ok(())
-    }
-
-    async fn handle_execute_step_request(&self, step: StepConfig) -> anyhow::Result<()> {
-        let result = self.execute_step().await.map_err(|e| e.to_string());
-        self.channel_tx
-            .send(Message::DebugClient(
-                DebugClientMessage::ExecuteStepResponse { result },
-            ))
-            .await?;
-
-        Ok(())
-    }
-
-    async fn execute_step(&self) -> anyhow::Result<()> {
-        anyhow::bail!("not_implemented")
     }
 }
