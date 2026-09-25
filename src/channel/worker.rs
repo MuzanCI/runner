@@ -168,6 +168,7 @@ impl Worker {
 
         let envs = {
             let mut envs = HashMap::new();
+            // TODO: Populate envs from step config.
             envs
         };
 

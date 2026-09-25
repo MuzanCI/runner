@@ -1,14 +1,10 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
 use muzanci_config::config::Config;
 use muzanci_config::config::TriggerConfig;
-use muzanci_git::GitBranch;
 use muzanci_git::GitClient;
-use muzanci_git::GitCommitSha;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;

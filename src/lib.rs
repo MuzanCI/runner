@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use http::HeaderMap;
+use http::HeaderValue;
 use http::Request;
 use tokio_util::sync::CancellationToken;
 
@@ -10,6 +12,7 @@ use muzanci_transport::channel::FnChannelAcceptor;
 use muzanci_transport::message::RunnerId;
 use muzanci_transport::mux::Mux;
 use muzanci_transport::mux::MuxHandle;
+use uuid::Uuid;
 
 use crate::assignment_capacity::SharedAssignmentCapacityHandle;
 use crate::evaluation_capacity::SharedEvaluationCapacity;
@@ -97,17 +100,7 @@ pub async fn connect(
         ));
     }
 
-    let runner_id = response
-        .headers()
-        .get(MUZANCI_RUNNER_ID_HEADER)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse::<RunnerId>().ok())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Missing or invalid {} header in response",
-                MUZANCI_RUNNER_ID_HEADER
-            )
-        })?;
+    let runner_id = extract_runner_id(response.headers())?;
 
     let server_stream = hyper::upgrade::on(response).await?;
     let server_stream = hyper_util::rt::TokioIo::new(server_stream);
@@ -124,4 +117,13 @@ pub async fn connect(
         Mux::spawn(read_half, write_half, channel_acceptor, cancellation_token);
 
     Ok((runner_id, mux_handle))
+}
+
+fn extract_runner_id(headers: &HeaderMap<HeaderValue>) -> anyhow::Result<RunnerId> {
+    let val = headers
+        .get(MUZANCI_RUNNER_ID_HEADER)
+        .ok_or_else(|| anyhow::anyhow!("missing header [{}]", MUZANCI_RUNNER_ID_HEADER))?;
+    let s = val.to_str().map_err(|e| anyhow::anyhow!(e))?;
+    let uuid = Uuid::try_parse(s).map_err(|e| anyhow::anyhow!(e))?;
+    Ok(uuid.into())
 }

@@ -383,6 +383,8 @@ impl Debugger {
 
     #[tracing::instrument(skip_all)]
     async fn start_shell(&self, step: StepConfig) -> anyhow::Result<()> {
+        // TODO: Setup step image.
+
         let (reply_tx, reply_rx) = oneshot::channel();
 
         DebuggerTunnel::spawn(
@@ -393,6 +395,7 @@ impl Debugger {
         );
 
         let () = reply_rx.await?;
+
         Ok(())
     }
 }

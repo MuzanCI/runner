@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use russh::CryptoVec;
 use std::collections::HashMap;
 use std::io;
 use std::os::fd::AsFd;
