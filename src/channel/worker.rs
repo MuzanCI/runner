@@ -4,8 +4,8 @@ use tokio::join;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use muzanci_config::StepConfig;
-use muzanci_config::StepId;
+use muzanci_config::config::StepConfig;
+use muzanci_config::config::StepId;
 use muzanci_git::GitClient;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;

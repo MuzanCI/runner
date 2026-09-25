@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use muzanci_config::Config;
+use muzanci_config::config::Config;
 use muzanci_config::config::TriggerConfig;
 use muzanci_git::GitBranch;
 use muzanci_git::GitClient;
