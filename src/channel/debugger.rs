@@ -230,7 +230,7 @@ impl Debugger {
         let sandbox = self
             .sandbox
             .as_ref()
-            .ok_or_else(|| DebuggerError(format!("sandbox is None")))?;
+            .ok_or_else(|| DebuggerError("sandbox is None".to_string()))?;
 
         {
             let git_client = GitClient::try_default()?;
@@ -382,7 +382,7 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn start_shell(&self, step: StepConfig) -> anyhow::Result<()> {
+    async fn start_shell(&self, _step: StepConfig) -> anyhow::Result<()> {
         // TODO: Setup step image.
 
         let (reply_tx, reply_rx) = oneshot::channel();

@@ -35,7 +35,7 @@ pub fn init() -> anyhow::Result<Option<tracing_appender::non_blocking::WorkerGua
 /// Initialize tracing for release/test/bench builds.
 #[cfg(any(not(debug_assertions), test))]
 pub fn init() -> anyhow::Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
-    let log_directory = format!(".");
+    let log_directory = ".".to_string();
     std::fs::create_dir_all(&log_directory)?;
 
     let (file_writer, guard) = tracing_appender::non_blocking(tracing_appender::rolling::never(

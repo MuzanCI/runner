@@ -166,7 +166,7 @@ impl SharedAssignmentCapacity {
                 })
             };
 
-            if let Err(_) = request.reply_tx.send(reply) {
+            if request.reply_tx.send(reply).is_err() {
                 return Err(anyhow::anyhow!("Failed to reply to request"));
             }
         }

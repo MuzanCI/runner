@@ -76,3 +76,6 @@ harness = false
 name = "sandbox_linux_integration_test"
 path = "tests/sandbox_linux_integration_test.rs"
 harness = false
+
+[lints.clippy]
+new_without_default = "allow"

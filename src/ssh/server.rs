@@ -57,9 +57,9 @@ impl Handler for ServerHandler {
     //
     async fn channel_open_session(
         &mut self,
-        channel: russh::Channel<russh::server::Msg>,
+        _channel: russh::Channel<russh::server::Msg>,
         reply: russh::server::ChannelOpenHandle,
-        session: &mut Session,
+        _session: &mut Session,
     ) -> Result<(), Self::Error> {
         reply.accept().await;
         Ok(())
@@ -234,8 +234,7 @@ impl Handler for ServerHandler {
         let (pty, mut child) = match Pty::spawn(cmd, self.cols, self.rows) {
             Ok(res) => res,
             Err(_) => {
-                return Err(russh::Error::IO(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(russh::Error::IO(std::io::Error::other(
                     "failed to spawn PTY",
                 )));
             }
@@ -267,7 +266,7 @@ impl Handler for ServerHandler {
         if let Some(ref pty) = self.pty {
             write_channel_to_pty(pty, data)
                 .await
-                .map_err(|e| russh::Error::from(e))?;
+                .map_err(russh::Error::from)?;
         }
         Ok(())
     }
@@ -287,16 +286,14 @@ impl Pty {
         };
 
         // 1. Safe PTY Allocation via nix
-        let pty =
-            openpty(Some(&winsize), None).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let pty = openpty(Some(&winsize), None).map_err(io::Error::other)?;
 
         // 2. Safe Non-Blocking Configuration via nix
-        let current_flags = fcntl(pty.master.as_fd(), FcntlArg::F_GETFL)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let current_flags =
+            fcntl(pty.master.as_fd(), FcntlArg::F_GETFL).map_err(io::Error::other)?;
 
         let new_flags = OFlag::from_bits_truncate(current_flags) | OFlag::O_NONBLOCK;
-        fcntl(pty.master.as_fd(), FcntlArg::F_SETFL(new_flags))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        fcntl(pty.master.as_fd(), FcntlArg::F_SETFL(new_flags)).map_err(io::Error::other)?;
 
         // 3. Command Pre-Exec Hook
         // UNSAFE EXPLANATION: `pre_exec` is inherently unsafe in Rust because running non-async-signal-safe

@@ -59,7 +59,7 @@ impl JailSandboxer {
         }
 
         let sandbox_dir = root_dir.join("sandbox.d");
-        std::fs::create_dir_all(&root_dir).map_err(|e| SandboxerError(e.to_string()))?;
+        std::fs::create_dir_all(root_dir).map_err(|e| SandboxerError(e.to_string()))?;
 
         // Assert bridge interface is ready to use.
         {
@@ -96,7 +96,7 @@ impl JailSandboxer {
         zfs_quota: ZfsDatasetQuotaGigabyte,
     ) -> Result<JailConfig, SandboxerError> {
         let jail_conf = self.jail_config(
-            sandbox_config.sandbox_id.clone(),
+            sandbox_config.sandbox_id,
             &sandbox_dir,
             slot_id,
             sandbox_config.image.platform.os.clone(),
@@ -238,25 +238,25 @@ impl JailSandboxer {
                 "/sbin/ifconfig {epair_jail_interface} inet {ip_addr} netmask 255.255.0.0 broadcast 11.0.255.255 up"
             ),
             // Add default route
-            format!("/sbin/route add default 11.0.0.1"),
+            "/sbin/route add default 11.0.0.1".to_string(),
             // Add default nameserver
-            format!("/bin/echo 'nameserver 1.1.1.1' > /etc/resolv.conf"),
+            "/bin/echo 'nameserver 1.1.1.1' > /etc/resolv.conf".to_string(),
             // Start base services
-            format!("/bin/sh /etc/rc"),
+            "/bin/sh /etc/rc".to_string(),
         ];
 
         match &rootfs {
             JailRootfs::Linux { .. } => {
-                exec_start.push(format!(
-                    "/bin/echo 'nameserver 1.1.1.1' > /compat/linux/etc/resolv.conf"
-                ));
+                exec_start.push(
+                    "/bin/echo 'nameserver 1.1.1.1' > /compat/linux/etc/resolv.conf".to_string(),
+                );
             }
             JailRootfs::FreeBSD { .. } => {}
         }
 
         let exec_stop = vec![
             // Stop base services
-            format!("/bin/sh /etc/rc.shutdown"),
+            "/bin/sh /etc/rc.shutdown".to_string(),
         ];
 
         let exec_poststop = vec![
@@ -389,7 +389,7 @@ impl Sandboxer for JailSandboxer {
             }
         };
 
-        let sandbox_dir = self.sandbox_dir.join(&config.sandbox_id.to_string());
+        let sandbox_dir = self.sandbox_dir.join(config.sandbox_id.to_string());
         std::fs::create_dir_all(&sandbox_dir).map_err(|e| SandboxerError(e.to_string()))?;
 
         let zfs_quota = 10;
@@ -406,10 +406,10 @@ impl Sandboxer for JailSandboxer {
     fn destroy(&self, sandbox: Arc<dyn Sandbox>) -> Result<(), SandboxerError> {
         let sandbox_dir = self
             .sandbox_dir
-            .join(&sandbox.config().sandbox_id.to_string());
+            .join(sandbox.config().sandbox_id.to_string());
 
         let jail_conf_path = sandbox_dir.join("jail.conf");
-        let jail_name = format!("sandbox-{}", &sandbox.config().sandbox_id.to_string());
+        let jail_name = format!("sandbox-{}", sandbox.config().sandbox_id);
 
         // Destroy jail.
         {

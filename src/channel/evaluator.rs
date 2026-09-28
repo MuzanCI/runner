@@ -35,7 +35,7 @@ pub struct Evaluator {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
     trigger_id: TriggerId,
-    capacity: EvaluationCapacity,
+    _capacity: EvaluationCapacity,
     _permit: EvaluationCapacityPermit,
 }
 
@@ -57,7 +57,7 @@ impl Evaluator {
                 runner_state,
                 channel_tx,
                 trigger_id,
-                capacity,
+                _capacity: capacity,
                 _permit: permit,
             }
             .run(channel_rx, channel_closed)
@@ -126,7 +126,7 @@ impl Evaluator {
             git_client.checkout_commit(
                 &config.remote.url,
                 &config.remote.branch,
-                &evaluator_dir.path(),
+                evaluator_dir.path(),
                 &config.commit_sha,
             )?;
             // git_client must be dropped here because it is not Send.

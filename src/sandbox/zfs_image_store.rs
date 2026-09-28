@@ -352,6 +352,7 @@ impl ZfsImageStore {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&self.gc_lock_path)
             .await
             .map_err(|e| ZfsImageStoreError(e.to_string()))?;
@@ -369,6 +370,7 @@ impl ZfsImageStore {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&self.gc_lock_path)
             .await
             .map_err(|e| ZfsImageStoreError(e.to_string()))?;
@@ -390,6 +392,7 @@ impl ZfsImageStore {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)
             .await
             .map_err(|e| ZfsImageStoreError(e.to_string()))?;
@@ -411,6 +414,7 @@ impl ZfsImageStore {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)
             .await
             .map_err(|e| ZfsImageStoreError(e.to_string()))?;
@@ -597,7 +601,7 @@ impl ZfsImageStore {
         // Iteratively build the chain.
         let mut parent_snapshot: Option<ZfsSnapshot> = None;
 
-        for (diff_id, layer) in diff_ids.into_iter().zip(layers.into_iter()) {
+        for (diff_id, layer) in diff_ids.into_iter().zip(layers.iter()) {
             let chain_id = match &parent_snapshot {
                 None => diff_id,
                 Some(parent_snapshot) => {
@@ -662,7 +666,7 @@ impl ZfsImageStore {
             }
         };
 
-        let chain_dir = self.chain_dir.join(&chain_id.to_string());
+        let chain_dir = self.chain_dir.join(chain_id.to_string());
 
         let working_dataset = match parent_snapshot {
             Some(parent_snapshot) => self
@@ -719,7 +723,7 @@ impl ZfsImageStore {
             if file_name == ".wh..wh..opq" {
                 // Remove all contents of parent directory.
                 if let Some(entry_parent_dir) = entry_path.parent() {
-                    std::fs::remove_dir_all(&entry_parent_dir)
+                    std::fs::remove_dir_all(entry_parent_dir)
                         .map_err(|e| ZfsImageStoreError(e.to_string()))?;
                 }
                 continue;

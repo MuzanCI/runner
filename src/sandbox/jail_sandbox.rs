@@ -36,7 +36,7 @@ impl JailSandbox {
             jail_conf,
             _slot: slot,
         };
-        std::fs::create_dir_all(&sandbox.workspace_path())
+        std::fs::create_dir_all(sandbox.workspace_path())
             .map_err(|e| SandboxError(e.to_string()))?;
         Ok(sandbox)
     }

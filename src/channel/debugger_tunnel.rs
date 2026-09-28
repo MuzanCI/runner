@@ -101,7 +101,7 @@ impl DebuggerTunnel {
         self.create_debug_tunnel(&mut channel_rx).await?;
         tracing::info!("Created debug tunnel");
 
-        let _session = self.start_ssh_server(channel_rx).await?;
+        self.start_ssh_server(channel_rx).await?;
         tracing::info!("Started SSH server");
 
         let _ = reply_tx.send(());

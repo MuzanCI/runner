@@ -67,120 +67,121 @@ impl JailConfig {
     }
 }
 
-impl ToString for JailConfig {
-    fn to_string(&self) -> String {
-        let mut s = String::new();
-
-        s.push_str(&format!("{} {{\n", self.name));
+impl std::fmt::Display for JailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{} {{", self.name)?;
 
         // Jail ID
-        s.push_str(&format!("jid = {};\n", self.jid));
+        writeln!(f, "jid = {};", self.jid)?;
 
         // Persist jail for multiple sequential `jexec`
-        s.push_str("persist;\n");
+        f.write_str("persist;\n")?;
 
         // Network stack
-        s.push_str("vnet;\n");
-        s.push_str(&format!("vnet.interface = \"{}\";\n", self.vnet_interface));
-        s.push_str(&format!("host.hostname = \"{}\";\n", self.hostname));
+        f.write_str("vnet;\n")?;
+        writeln!(f, "vnet.interface = \"{}\";", self.vnet_interface)?;
+        writeln!(f, "host.hostname = \"{}\";", self.hostname)?;
 
         // Root filesystem path
-        s.push_str(&format!("path = \"{}\";\n", self.path.display()));
-        s.push_str("enforce_statfs = 2;\n");
+        writeln!(f, "path = \"{}\";", self.path.display())?;
+        f.write_str("enforce_statfs = 2;\n")?;
 
         // DevFS
-        s.push_str("mount.devfs;\n");
-        s.push_str("mount.fdescfs;\n");
-        s.push_str("devfs_ruleset = 100;\n");
+        f.write_str("mount.devfs;\n")?;
+        f.write_str("mount.fdescfs;\n")?;
+        f.write_str("devfs_ruleset = 100;\n")?;
 
         // Permissions
-        s.push_str("securelevel = 1;\n");
-        s.push_str("children.max = 10;\n");
-        s.push_str("allow.suser = 1;\n");
-        s.push_str("allow.reserved_ports = 1;\n");
-        s.push_str("allow.quotas = 1;\n");
-        s.push_str("allow.set_hostname = 0;\n");
-        s.push_str("allow.sysvipc = 0;\n");
-        s.push_str("allow.raw_sockets = 0;\n");
-        s.push_str("allow.chflags = 0;\n");
-        s.push_str("allow.mount = 0;\n");
-        s.push_str("allow.mount.devfs = 0;\n");
-        s.push_str("allow.read_msgbuf = 0;\n");
-        s.push_str("allow.socket_af = 0;\n");
-        s.push_str("allow.mlock = 0;\n");
-        s.push_str("allow.nfsd = 0;\n");
-        s.push_str("allow.unprivileged_parent_tampering = 0;\n");
-        s.push_str("allow.unprivileged_proc_debug = 0;\n");
-        s.push_str("allow.extattr = 0;\n");
-        s.push_str("allow.adjtime = 0;\n");
-        s.push_str("allow.settime = 0;\n");
-        s.push_str("allow.routing = 0;\n");
-        s.push_str("allow.setaudit = 0;\n");
+        f.write_str("securelevel = 1;\n")?;
+        f.write_str("children.max = 10;\n")?;
+        f.write_str("allow.suser = 1;\n")?;
+        f.write_str("allow.reserved_ports = 1;\n")?;
+        f.write_str("allow.quotas = 1;\n")?;
+        f.write_str("allow.set_hostname = 0;\n")?;
+        f.write_str("allow.sysvipc = 0;\n")?;
+        f.write_str("allow.raw_sockets = 0;\n")?;
+        f.write_str("allow.chflags = 0;\n")?;
+        f.write_str("allow.mount = 0;\n")?;
+        f.write_str("allow.mount.devfs = 0;\n")?;
+        f.write_str("allow.read_msgbuf = 0;\n")?;
+        f.write_str("allow.socket_af = 0;\n")?;
+        f.write_str("allow.mlock = 0;\n")?;
+        f.write_str("allow.nfsd = 0;\n")?;
+        f.write_str("allow.unprivileged_parent_tampering = 0;\n")?;
+        f.write_str("allow.unprivileged_proc_debug = 0;\n")?;
+        f.write_str("allow.extattr = 0;\n")?;
+        f.write_str("allow.adjtime = 0;\n")?;
+        f.write_str("allow.settime = 0;\n")?;
+        f.write_str("allow.routing = 0;\n")?;
+        f.write_str("allow.setaudit = 0;\n")?;
 
         match self.platform_os {
             ImagePlatformOs::LINUX => {
-                s.push_str("linux = new;\n");
-                s.push_str("mount += \"devfs ${path}/compat/linux/dev devfs rw 0 0\";\n");
-                s.push_str(
+                f.write_str("linux = new;\n")?;
+                f.write_str("mount += \"devfs ${path}/compat/linux/dev devfs rw 0 0\";\n")?;
+                f.write_str(
                     "mount += \"tmpfs ${path}/compat/linux/dev/shm tmpfs rw,size=1g,mode=1777 0 0\";\n",
-                );
-                s.push_str(
+                )?;
+                f.write_str(
                     "mount += \"fdescfs ${path}/compat/linux/dev/fd fdescfs rw,linrdlnk 0 0\";\n",
-                );
-                s.push_str("mount += \"linprocfs ${path}/compat/linux/proc linprocfs rw 0 0\";\n");
-                s.push_str("mount += \"linsysfs ${path}/compat/linux/sys linsysfs rw 0 0\";\n");
-                s.push_str("mount += \"/tmp ${path}/compat/linux/tmp nullfs rw 0 0\";\n");
-                s.push_str("mount += \"/home ${path}/compat/linux/home nullfs rw 0 0\";\n");
+                )?;
+                f.write_str(
+                    "mount += \"linprocfs ${path}/compat/linux/proc linprocfs rw 0 0\";\n",
+                )?;
+                f.write_str("mount += \"linsysfs ${path}/compat/linux/sys linsysfs rw 0 0\";\n")?;
+                f.write_str("mount += \"/tmp ${path}/compat/linux/tmp nullfs rw 0 0\";\n")?;
+                f.write_str("mount += \"/home ${path}/compat/linux/home nullfs rw 0 0\";\n")?;
             }
             ImagePlatformOs::FREEBSD => {}
             ImagePlatformOs::OTHER(_) => {}
         }
 
         // Exec psudo-parameters
-        s.push_str("exec.clean;\n");
+        f.write_str("exec.clean;\n")?;
 
-        s.push_str(&format!(
-            "exec.consolelog = \"{}\";\n",
-            self.exec_console_log.display()
-        ));
+        writeln!(
+            f,
+            "exec.consolelog = \"{}\";",
+            self.exec_console_log.display(),
+        )?;
 
-        s.push_str("exec.prepare = \"echo exec.prepare\";\n");
+        f.write_str("exec.prepare = \"echo exec.prepare\";\n")?;
         for exec in &self.exec_prepare {
-            s.push_str(&format!("exec.prepare += \"{}\";\n", exec))
+            writeln!(f, "exec.prepare += \"{}\";", exec)?;
         }
 
-        s.push_str("exec.prestart = \"echo exec.prestart\";\n");
+        f.write_str("exec.prestart = \"echo exec.prestart\";\n")?;
         for exec in &self.exec_prestart {
-            s.push_str(&format!("exec.prestart += \"{}\";\n", exec))
+            writeln!(f, "exec.prestart += \"{}\";", exec)?;
         }
 
-        s.push_str("exec.created = \"echo exec.created\";\n");
+        f.write_str("exec.created = \"echo exec.created\";\n")?;
         for exec in &self.exec_created {
-            s.push_str(&format!("exec.created += \"{}\";\n", exec))
+            writeln!(f, "exec.created += \"{}\";", exec)?;
         }
 
-        s.push_str("exec.start = \"/bin/echo exec.start\";\n");
+        f.write_str("exec.start = \"/bin/echo exec.start\";\n")?;
         for exec in &self.exec_start {
-            s.push_str(&format!("exec.start += \"{}\";\n", exec))
+            writeln!(f, "exec.start += \"{}\";", exec)?;
         }
 
-        s.push_str("exec.stop = \"/bin/echo exec.stop\";\n");
+        f.write_str("exec.stop = \"/bin/echo exec.stop\";\n")?;
         for exec in &self.exec_stop {
-            s.push_str(&format!("exec.stop += \"{}\";\n", exec))
+            writeln!(f, "exec.stop += \"{}\";", exec)?;
         }
 
-        s.push_str("exec.poststop = \"echo exec.poststop\";\n");
+        f.write_str("exec.poststop = \"echo exec.poststop\";\n")?;
         for exec in &self.exec_poststop {
-            s.push_str(&format!("exec.poststop += \"{}\";\n", exec))
+            writeln!(f, "exec.poststop += \"{}\";", exec)?;
         }
 
-        s.push_str("exec.release = \"echo exec.release\";\n");
+        f.write_str("exec.release = \"echo exec.release\";\n")?;
         for exec in &self.exec_release {
-            s.push_str(&format!("exec.release += \"{}\";\n", exec))
+            writeln!(f, "exec.release += \"{}\";", exec)?;
         }
 
-        s.push_str("}\n");
+        f.write_str("}\n")?;
 
-        s
+        Ok(())
     }
 }

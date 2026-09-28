@@ -20,7 +20,7 @@ use muzanci_transport::message::ProcessOutput;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let root_dir = PathBuf::from(format!("/tmp/muzanci_runner/root_dir"));
+    let root_dir = PathBuf::from("/tmp/muzanci_runner/root_dir");
     std::fs::create_dir_all(&root_dir)?;
 
     eprintln!("Created test dir [{}]", root_dir.display());

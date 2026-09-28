@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use muzanci_config::config::StepConfig;
-use muzanci_config::config::StepId;
+use muzanci_config::config::StepIndex;
 use muzanci_git::GitClient;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
@@ -105,10 +105,7 @@ impl Worker {
             sandbox_id: SandboxId::now_v7(),
             image: task_config.image,
         };
-        let sandbox: Arc<dyn Sandbox> = {
-            let sandbox = self.runner_state.sandboxer.create(sandbox_config).await?;
-            Arc::from(sandbox)
-        };
+        let sandbox = self.runner_state.sandboxer.create(sandbox_config).await?;
         {
             let git_client = GitClient::try_default()?;
             git_client.checkout_commit(
@@ -118,9 +115,14 @@ impl Worker {
                 &task_config.commit_sha,
             )?;
         }
-        for step in task_config.steps {
+        for (step_index, step) in task_config.steps.into_iter().enumerate() {
             match self
-                .run_item(&mut channel_rx, sandbox.clone(), step)
+                .run_item(
+                    &mut channel_rx,
+                    sandbox.clone(),
+                    (step_index as i64).into(),
+                    step,
+                )
                 .await?
             {
                 ItemResult::Continue => {
@@ -161,10 +163,10 @@ impl Worker {
         &self,
         channel_rx: &mut ChannelReceiver,
         sandbox: Arc<dyn Sandbox>,
+        step_index: StepIndex,
         step: StepConfig,
     ) -> anyhow::Result<ItemResult> {
-        let step_id = step.step_id;
-        self.start_item(channel_rx, step_id).await?;
+        self.start_item(channel_rx, step_index).await?;
 
         let envs = {
             let mut envs = HashMap::new();
@@ -178,7 +180,7 @@ impl Worker {
                 self.runner_state.clone(),
                 self.channel_tx.clone(),
                 self.task_id,
-                step_id,
+                step_index,
                 output_rx,
             );
             let process_handle = sandbox.run(&step.command, &envs, output_tx);
@@ -194,32 +196,25 @@ impl Worker {
             .send(Message::Worker(WorkerMessage::ItemProcessExitStatus {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
-                step_id,
+                step_index,
                 exit_status,
             }))
             .await?;
 
         match exit_status {
-            ExitStatus::Code(code) if code == 0 => {
-                self.complete_item(channel_rx, step_id).await?;
+            ExitStatus::Code(0) => {
+                self.complete_item(channel_rx, step_index).await?;
                 Ok(ItemResult::Continue)
             }
-            ExitStatus::Code(code) => {
-                self.fail_item(
-                    channel_rx,
-                    step_id,
-                    format!("Process exited with non-zero status code: [{}]", code),
-                )
-                .await?;
-                Ok(ItemResult::Fail(format!(
-                    "Process exited with non-zero status code: [{}]",
-                    code
-                )))
+            ExitStatus::Code(non_zero_code) => {
+                let e = format!("Process exited with non-zero status code: [{non_zero_code}]");
+                self.fail_item(channel_rx, step_index, e.clone()).await?;
+                Ok(ItemResult::Fail(e))
             }
             ExitStatus::Signal => {
                 self.fail_item(
                     channel_rx,
-                    step_id,
+                    step_index,
                     "Process terminated by signal".to_string(),
                 )
                 .await?;
@@ -276,13 +271,13 @@ impl Worker {
     async fn start_item(
         &self,
         channel_rx: &mut ChannelReceiver,
-        step_id: StepId,
+        step_index: StepIndex,
     ) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::StartItemRequest {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
-                step_id,
+                step_index,
             }))
             .await?;
 
@@ -301,13 +296,13 @@ impl Worker {
     async fn complete_item(
         &self,
         channel_rx: &mut ChannelReceiver,
-        step_id: StepId,
+        step_index: StepIndex,
     ) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::CompleteItemRequest {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
-                step_id,
+                step_index,
             }))
             .await?;
 
@@ -326,14 +321,14 @@ impl Worker {
     async fn fail_item(
         &self,
         channel_rx: &mut ChannelReceiver,
-        step_id: StepId,
+        step_index: StepIndex,
         reason: String,
     ) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::FailItemRequest {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
-                step_id,
+                step_index,
                 reason,
             }))
             .await?;
@@ -370,7 +365,7 @@ pub struct WorkerItemOutput {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
     task_id: TaskId,
-    step_id: StepId,
+    step_index: StepIndex,
     output_rx: mpsc::Receiver<ProcessOutput>,
 }
 
@@ -379,7 +374,7 @@ impl WorkerItemOutput {
         runner_state: Arc<RunnerState>,
         channel_tx: ChannelSender,
         task_id: TaskId,
-        step_id: StepId,
+        step_index: StepIndex,
         output_rx: mpsc::Receiver<ProcessOutput>,
     ) -> WorkerStepOutputHandle {
         let runner_state = runner_state.clone();
@@ -388,7 +383,7 @@ impl WorkerItemOutput {
                 runner_state,
                 channel_tx,
                 task_id,
-                step_id,
+                step_index,
                 output_rx,
             }
             .run()
@@ -419,7 +414,7 @@ impl WorkerItemOutput {
                 .send(Message::Worker(WorkerMessage::ItemProcessOutput {
                     runner_id: self.runner_state.runner_id,
                     task_id: self.task_id,
-                    step_id: self.step_id,
+                    step_index: self.step_index,
                     output,
                 }))
                 .await;
