@@ -12,6 +12,7 @@ use muzanci_config::config::DebugSessionId;
 use muzanci_transport::channel::ChannelType;
 use muzanci_transport::mux::MuxHandle;
 
+use crate::RunnerState;
 use crate::ssh::server::ServerHandler;
 
 pub struct DebuggerTunnelHandle {
@@ -30,25 +31,25 @@ impl Future for DebuggerTunnelHandle {
 }
 
 pub struct DebuggerTunnel {
-    cancellation_token: CancellationToken,
+    runner_state: Arc<RunnerState>,
     debug_session_id: DebugSessionId,
     channel_tx: ChannelSender,
 }
 
 impl DebuggerTunnel {
     pub fn spawn(
-        mux_handle: MuxHandle,
-        cancellation_token: CancellationToken,
+        runner_state: Arc<RunnerState>,
         debug_session_id: DebugSessionId,
         reply_tx: oneshot::Sender<()>,
     ) -> DebuggerTunnelHandle {
         let handle = tokio::spawn(async move {
-            let (channel_tx, channel_rx, channel_closed) = mux_handle
+            let (channel_tx, channel_rx, channel_closed) = runner_state
+                .mux_handle
                 .open_channel(ChannelType::DebuggerTunnel)
                 .await
                 .unwrap();
             DebuggerTunnel {
-                cancellation_token,
+                runner_state,
                 debug_session_id,
                 channel_tx,
             }
@@ -66,7 +67,7 @@ impl DebuggerTunnel {
         channel_closed: CancellationToken,
         reply_tx: oneshot::Sender<()>,
     ) -> anyhow::Result<()> {
-        let cancellation_token = self.cancellation_token.clone();
+        let cancellation_token = self.runner_state.cancellation_token.clone();
         tokio::select! {
             _ = cancellation_token.cancelled() => {
                 tracing::info!("DebuggerTunnel received cancellation signal.");
@@ -115,6 +116,7 @@ impl DebuggerTunnel {
         self.channel_tx
             .send(Message::DebuggerTunnel(
                 DebuggerTunnelMessage::CreateDebugTunnelRequest {
+                    runner_id: self.runner_state.runner_id,
                     debug_session_id: self.debug_session_id,
                 },
             ))

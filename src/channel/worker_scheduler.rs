@@ -7,10 +7,12 @@ use muzanci_transport::message::Message;
 use muzanci_transport::message::TaskId;
 use muzanci_transport::message::WaitingTask;
 use muzanci_transport::message::WorkerSchedulerMessage;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::RunnerState;
 use crate::channel::worker::Worker;
+use crate::channel::worker_killer::WorkerKiller;
 
 pub struct WorkerSchedulerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -101,10 +103,19 @@ impl WorkerScheduler {
                         continue;
                     }
                 };
+
                 match self.reserve_task(&mut channel_rx, task.task_id).await {
-                    Ok(_) => {
+                    Ok(()) => {
                         tracing::info!("Successfully reserved task {:?}", task);
-                        Worker::spawn(self.runner_state.clone(), task.task_id, permit);
+
+                        let killed = CancellationToken::new();
+                        WorkerKiller::spawn(
+                            self.runner_state.clone(),
+                            killed.clone(),
+                            task.task_id,
+                        );
+
+                        Worker::spawn(self.runner_state.clone(), killed, task.task_id, permit);
                     }
                     Err(e) => {
                         tracing::error!("Failed to reserve task {:?}: {:?}", task, e);
@@ -131,7 +142,9 @@ impl WorkerScheduler {
         tracing::info!("Fetching waiting tasks from the server.");
         self.channel_tx
             .send(Message::WorkerScheduler(
-                WorkerSchedulerMessage::FetchWaitingTasksRequest,
+                WorkerSchedulerMessage::FetchWaitingTasksRequest {
+                    runner_id: self.runner_state.runner_id,
+                },
             ))
             .await?;
 

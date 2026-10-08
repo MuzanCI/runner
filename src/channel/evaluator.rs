@@ -46,7 +46,6 @@ impl Evaluator {
         capacity: EvaluationCapacity,
         permit: EvaluationCapacityPermit,
     ) -> EvaluatorHandle {
-        let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle

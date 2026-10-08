@@ -34,7 +34,6 @@ pub struct EvaluatorScheduler {
 
 impl EvaluatorScheduler {
     pub fn spawn(runner_state: Arc<RunnerState>) -> EvaluatorSchedulerHandle {
-        let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
@@ -140,7 +139,9 @@ impl EvaluatorScheduler {
         tracing::info!("Fetching waiting triggers from the server.");
         self.channel_tx
             .send(Message::EvaluatorScheduler(
-                EvaluatorSchedulerMessage::FetchWaitingTriggersRequest,
+                EvaluatorSchedulerMessage::FetchWaitingTriggersRequest {
+                    runner_id: self.runner_state.runner_id,
+                },
             ))
             .await?;
 

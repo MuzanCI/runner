@@ -34,7 +34,6 @@ pub struct DebuggerScheduler {
 
 impl DebuggerScheduler {
     pub fn spawn(runner_state: Arc<RunnerState>) -> DebuggerSchedulerHandle {
-        let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
@@ -143,7 +142,9 @@ impl DebuggerScheduler {
         tracing::info!("Fetching waiting debugs from the server.");
         self.channel_tx
             .send(Message::DebuggerScheduler(
-                DebuggerSchedulerMessage::FetchWaitingDebugSessionsRequest,
+                DebuggerSchedulerMessage::FetchWaitingDebugSessionsRequest {
+                    runner_id: self.runner_state.runner_id,
+                },
             ))
             .await?;
 

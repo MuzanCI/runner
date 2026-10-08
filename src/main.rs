@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use muzanci_image::reqwest_registry_client::ReqwestRegistryClient;
 use muzanci_runner::RunnerState;
@@ -13,17 +15,23 @@ use muzanci_runner::sandbox::jail_sandboxer::JailSandboxer;
 use muzanci_runner::sandbox::zfs_image_store::ZfsImageStore;
 use muzanci_runner::sandbox::zfs_image_store::ZfsPool;
 use muzanci_runner::signal_receiver::SignalReceiver;
-use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() {
     let _guard = muzanci_runner::logging::init().unwrap();
 
     let cancellation_token = CancellationToken::new();
-    let hostname = "localhost:8002";
-    let (runner_id, mux_handle) = muzanci_runner::connect(hostname, cancellation_token.clone())
-        .await
-        .unwrap();
+    let hostname = std::env::var("MUZANCI_SERVER_HOSTNAME_AND_PORT").unwrap();
+    let secret = std::env::var("MUZANCI_SECRET").unwrap();
+    let account_id = {
+        let account_id_str = std::env::var("MUZANCI_ACCOUNT_ID").unwrap();
+        Uuid::try_parse(&account_id_str).unwrap()
+    };
+
+    let (runner_id, mux_handle) =
+        muzanci_runner::connect(&hostname, &secret, account_id, cancellation_token.clone())
+            .await
+            .unwrap();
     tracing::info!("Assigned runner ID [{}]", runner_id);
 
     let evaluation_capacity = SharedEvaluationCapacity::new(10);

@@ -61,7 +61,6 @@ impl Debugger {
         debug_session_id: DebugSessionId,
         permit: AssignmentCapacityPermit,
     ) -> DebuggerHandle {
-        let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
@@ -126,6 +125,7 @@ impl Debugger {
     async fn connect_debugger(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Debugger(DebuggerMessage::ConnectDebuggerRequest {
+                runner_id: self.runner_state.runner_id,
                 debug_session_id: self.debug_session_id,
             }))
             .await?;
@@ -387,12 +387,7 @@ impl Debugger {
 
         let (reply_tx, reply_rx) = oneshot::channel();
 
-        DebuggerTunnel::spawn(
-            self.runner_state.mux_handle.clone(),
-            self.runner_state.cancellation_token(),
-            self.debug_session_id,
-            reply_tx,
-        );
+        DebuggerTunnel::spawn(self.runner_state.clone(), self.debug_session_id, reply_tx);
 
         let () = reply_rx.await?;
 

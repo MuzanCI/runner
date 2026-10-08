@@ -42,6 +42,7 @@ impl Sandbox for FakeSandbox {
             .envs(envs)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| SandboxError(e.to_string()))?;
 

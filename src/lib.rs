@@ -65,6 +65,8 @@ impl RunnerState {
 
 pub async fn connect(
     hostname: &str,
+    secret: &str,
+    account_id: Uuid,
     cancellation_token: CancellationToken,
 ) -> anyhow::Result<(RunnerId, MuxHandle)> {
     let server_stream = {
@@ -88,6 +90,8 @@ pub async fn connect(
         .header(http::header::HOST, hostname)
         .header(http::header::CONNECTION, "Upgrade")
         .header(http::header::UPGRADE, MUZANCI_TRANSPORT_V1)
+        .header("x-muzanci-personal-access-token", secret.to_string())
+        .header("x-muzanci-account-id", account_id.to_string())
         .body(http_body_util::Empty::<bytes::Bytes>::new())
         .unwrap();
 
