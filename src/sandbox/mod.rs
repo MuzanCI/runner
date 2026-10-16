@@ -20,7 +20,7 @@ pub type NetworkInterface = String;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-pub struct SandboxError(pub String);
+pub struct SandboxError(String);
 
 pub struct SandboxConfig {
     pub sandbox_id: SandboxId,
@@ -48,7 +48,7 @@ pub type SandboxId = uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-pub struct SandboxerError(pub String);
+pub struct SandboxerError(String);
 
 #[async_trait::async_trait]
 pub trait Sandboxer
