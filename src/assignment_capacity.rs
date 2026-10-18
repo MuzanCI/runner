@@ -1,3 +1,4 @@
+use muzanci_observability::TError;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -13,7 +14,7 @@ struct AssignmentCapacityRequest {
     amount: AssignmentCapacity,
 
     /// The channel to notify the sender that the request has been fulfilled.
-    reply_tx: oneshot::Sender<anyhow::Result<AssignmentCapacityPermit>>,
+    reply_tx: oneshot::Sender<Result<AssignmentCapacityPermit, TError>>,
 }
 
 /// A handle to the actor that manages assignment capacity.
@@ -29,7 +30,7 @@ impl SharedAssignmentCapacityHandle {
     pub async fn reserve_high(
         &self,
         amount: AssignmentCapacity,
-    ) -> anyhow::Result<AssignmentCapacityPermit> {
+    ) -> Result<AssignmentCapacityPermit, TError> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
         self.high_prio_request_tx
@@ -43,7 +44,7 @@ impl SharedAssignmentCapacityHandle {
     pub async fn reserve_low(
         &self,
         amount: AssignmentCapacity,
-    ) -> anyhow::Result<AssignmentCapacityPermit> {
+    ) -> Result<AssignmentCapacityPermit, TError> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
         self.low_prio_request_tx
@@ -102,7 +103,7 @@ impl SharedAssignmentCapacity {
         }
     }
 
-    async fn run(mut self) -> anyhow::Result<()> {
+    async fn run(mut self) -> Result<(), TError> {
         loop {
             // Process restorations first to free up capacity
             while let Ok(amount) = self.restore_rx.try_recv() {
@@ -132,7 +133,7 @@ impl SharedAssignmentCapacity {
         Ok(())
     }
 
-    fn process_queues(&mut self) -> anyhow::Result<()> {
+    fn process_queues(&mut self) -> Result<(), TError> {
         Self::fulfill_queue(
             &mut self.capacity,
             &mut self.high_prio_request_queue,
@@ -154,10 +155,10 @@ impl SharedAssignmentCapacity {
         capacity: &mut AssignmentCapacity,
         queue: &mut VecDeque<AssignmentCapacityRequest>,
         restore_tx: &mpsc::Sender<AssignmentCapacity>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TError> {
         while let Some(request) = queue.pop_front() {
             let reply = if *capacity < request.amount {
-                Err(anyhow::anyhow!("Insufficient capacity"))
+                Err(TError::new("Insufficient capacity"))
             } else {
                 *capacity -= request.amount;
                 Ok(AssignmentCapacityPermit {
@@ -167,7 +168,7 @@ impl SharedAssignmentCapacity {
             };
 
             if request.reply_tx.send(reply).is_err() {
-                return Err(anyhow::anyhow!("Failed to reply to request"));
+                return Err(TError::new("Failed to reply to request"));
             }
         }
 

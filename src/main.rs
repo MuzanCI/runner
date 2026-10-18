@@ -18,7 +18,7 @@ use muzanci_runner::signal_receiver::SignalReceiver;
 
 #[tokio::main]
 async fn main() {
-    let _guard = muzanci_runner::logging::init().unwrap();
+    let _guard = muzanci_observability::init_tracing().unwrap();
 
     let cancellation_token = CancellationToken::new();
     let hostname = std::env::var("MUZANCI_SERVER_HOSTNAME_AND_PORT").unwrap();

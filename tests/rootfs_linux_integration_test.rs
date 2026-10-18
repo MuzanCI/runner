@@ -1,6 +1,7 @@
 use muzanci_image::image::ImagePlatform;
 use muzanci_image::image::ImagePlatformArchitecture;
 use muzanci_image::image::ImagePlatformOs;
+use muzanci_observability::TError;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,7 +11,9 @@ use muzanci_runner::sandbox::zfs_image_store::ZfsImageStore;
 use muzanci_runner::sandbox::zfs_image_store::ZfsPool;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), TError> {
+    let _guard = muzanci_observability::init_tracing().unwrap();
+
     // Setup test environment.
     let root_dir = PathBuf::from("/tmp/muzanci_runner/root_dir");
     std::fs::create_dir_all(&root_dir)?;

@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use muzanci_config::config::DebugSessionId;
+use muzanci_observability::TError;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
 use muzanci_transport::message::DebuggerSchedulerMessage;
 use muzanci_transport::message::Message;
 use muzanci_transport::message::WaitingDebugSession;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::RunnerState;
@@ -30,6 +32,8 @@ impl Future for DebuggerSchedulerHandle {
 pub struct DebuggerScheduler {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
+    channel_rx: ChannelReceiver,
+    join_set: JoinSet<Result<(), TError>>,
 }
 
 impl DebuggerScheduler {
@@ -40,53 +44,71 @@ impl DebuggerScheduler {
                 .open_channel(ChannelType::DebuggerScheduler)
                 .await
                 .unwrap();
+
+            let join_set = JoinSet::new();
+
             DebuggerScheduler {
                 runner_state,
                 channel_tx,
+                channel_rx,
+                join_set,
             }
-            .run(channel_rx, channel_closed)
+            .main(channel_closed)
             .await
             .unwrap();
         });
+
         DebuggerSchedulerHandle { handle }
     }
 
-    async fn run(
-        self,
-        channel_rx: ChannelReceiver,
-        channel_closed: CancellationToken,
-    ) -> anyhow::Result<()> {
+    async fn main(mut self, channel_closed: CancellationToken) -> Result<(), TError> {
         tracing::info!("DebuggerScheduler started running.");
-        let cancellation_token = self.runner_state.cancellation_token.clone();
-        tokio::select! {
-            _ = cancellation_token.cancelled() => {
-                tracing::info!("DebuggerScheduler received cancellation signal.");
-                Ok(())
-            }
 
-            _ = channel_closed.cancelled() => {
-                tracing::info!("Channel closed. Stopping DebuggerScheduler.");
-                Ok(())
-            }
+        let cancelled_fut = {
+            let runner_shutdown = self.runner_state.runner_shutdown();
 
-            result = self.main(channel_rx) => {
-                match result {
-                    Ok(_) => {
-                        tracing::info!("DebuggerScheduler finished running.");
-                        Ok(())
+            async move {
+                tokio::select! {
+                    _ = runner_shutdown.cancelled() => {
+                        tracing::info!("DebuggerScheduler received runner shutdown signal.");
                     }
-                    Err(e) => {
-                        tracing::error!("DebuggerScheduler encountered an error: {:?}", e);
-                        Err(e)
+                    _ = channel_closed.cancelled() => {
+                        tracing::info!("Channel closed. Stopping DebuggerScheduler.");
                     }
                 }
             }
+        };
+
+        tokio::select! {
+            _ = cancelled_fut => {
+                tracing::info!("Waiting for subtasks to finish...");
+
+                while let Some(result) = self.join_set.join_next().await {
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
+                            tracing::error!("DebuggerScheduler subtask error: {e:?}");
+                        }
+                        Err(e) => {
+                            tracing::error!("DebuggerScheduler join error: {e:?}");
+                        }
+                    }
+                }
+
+                tracing::info!("All subtasks finished. Stopping DebuggerScheduler.");
+            }
+
+            result = self.run() => {
+                result?;
+            }
         }
+
+        Ok(())
     }
 
-    async fn main(self, mut channel_rx: ChannelReceiver) -> anyhow::Result<()> {
+    async fn run(&mut self) -> Result<(), TError> {
         loop {
-            let debugs = self.fetch_waiting_debugs(&mut channel_rx).await?;
+            let debugs = self.fetch_waiting_debugs().await?;
 
             // Iterate over debugs and attempt to reserve until capacity is reached or no more debugs are available.
             for waiting_debug in debugs {
@@ -103,13 +125,12 @@ impl DebuggerScheduler {
                         continue;
                     }
                 };
-                match self
-                    .reserve_debug(&mut channel_rx, waiting_debug.debug_session_id)
-                    .await
-                {
-                    Ok(_) => {
+                match self.reserve_debug(waiting_debug.debug_session_id).await {
+                    Ok(()) => {
                         tracing::info!("Successfully reserved debug {:?}", waiting_debug);
+
                         Debugger::spawn(
+                            &mut self.join_set,
                             self.runner_state.clone(),
                             waiting_debug.debug_session_id,
                             permit,
@@ -135,10 +156,7 @@ impl DebuggerScheduler {
     }
 
     // TODO: Add filters for waiting debugs.
-    async fn fetch_waiting_debugs(
-        &self,
-        channel_rx: &mut ChannelReceiver,
-    ) -> anyhow::Result<Vec<WaitingDebugSession>> {
+    async fn fetch_waiting_debugs(&mut self) -> Result<Vec<WaitingDebugSession>, TError> {
         tracing::info!("Fetching waiting debugs from the server.");
         self.channel_tx
             .send(Message::DebuggerScheduler(
@@ -148,27 +166,23 @@ impl DebuggerScheduler {
             ))
             .await?;
 
-        channel_rx
+        self.channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::DebuggerScheduler(
                     DebuggerSchedulerMessage::FetchWaitingDebugSessionsResponse { result },
-                ) => result.map_err(|e| anyhow::anyhow!(e)),
+                ) => result.map_err(|e| TError::new(&e.to_string())),
                 _ => {
                     tracing::error!("Unexpected response: {:?}", response);
-                    Err(anyhow::anyhow!("Unexpected response"))
+                    Err(TError::new("Unexpected response"))
                 }
             })
     }
 
     // Uses the reserve and commit pattern for cancellation safety.
-    async fn reserve_debug(
-        &self,
-        channel_rx: &mut ChannelReceiver,
-        debug_session_id: DebugSessionId,
-    ) -> anyhow::Result<()> {
+    async fn reserve_debug(&mut self, debug_session_id: DebugSessionId) -> Result<(), TError> {
         self.channel_tx
             .send(Message::DebuggerScheduler(
                 DebuggerSchedulerMessage::ReserveDebugSessionRequest {
@@ -178,17 +192,17 @@ impl DebuggerScheduler {
             ))
             .await?;
 
-        channel_rx
+        self.channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::DebuggerScheduler(
                     DebuggerSchedulerMessage::ReserveDebugSessionResponse { result },
-                ) => result.map_err(|e| anyhow::anyhow!(e)),
+                ) => result.map_err(|e| TError::new(&e.to_string())),
                 _ => {
                     eprintln!("Unexpected response: {:?}", response);
-                    Err(anyhow::anyhow!("Unexpected response"))
+                    Err(TError::new("Unexpected response"))
                 }
             })
     }

@@ -1,3 +1,4 @@
+use muzanci_observability::TError;
 use std::future::IntoFuture;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -32,11 +33,11 @@ impl SignalReceiver {
         SignalReceiverHandle { handle }
     }
 
-    async fn run(&mut self) -> anyhow::Result<()> {
+    async fn run(&mut self) -> Result<(), TError> {
         tracing::info!("[SignalReceiver::run] starting main...");
-        let cancellation_token = self.runner_state.cancellation_token();
+        let runner_shutdown = self.runner_state.runner_shutdown();
         tokio::select! {
-            _ = cancellation_token.cancelled() => {
+            _ = runner_shutdown.cancelled() => {
                 tracing::info!("[SignalReceiver::run] received cancellation signal.");
                 Ok(())
             }
@@ -55,15 +56,17 @@ impl SignalReceiver {
         }
     }
 
-    async fn main(&mut self) -> anyhow::Result<()> {
-        let cancellation_token = self.runner_state.cancellation_token();
+    async fn main(&mut self) -> Result<(), TError> {
+        let runner_shutdown = self.runner_state.runner_shutdown();
 
         let mut sigint = match signal(SignalKind::interrupt()) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("failed to install SIGINT handler: {e}");
-                cancellation_token.cancel();
-                anyhow::bail!("failed to install SIGINT handler: {e}");
+                runner_shutdown.cancel();
+                return Err(TError::new(&format!(
+                    "failed to install SIGINT handler: {e}"
+                )));
             }
         };
 
@@ -71,19 +74,21 @@ impl SignalReceiver {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("failed to install SIGTERM handler: {e}");
-                cancellation_token.cancel();
-                anyhow::bail!("failed to install SIGTERM handler: {e}");
+                runner_shutdown.cancel();
+                return Err(TError::new(&format!(
+                    "failed to install SIGTERM handler: {e}"
+                )));
             }
         };
 
         tokio::select! {
             _ = sigint.recv() => {
                 tracing::warn!("SIGINT received, shutting down...");
-                cancellation_token.cancel();
+                runner_shutdown.cancel();
             }
             _ = sigterm.recv() => {
                 tracing::warn!("SIGTERM received, shutting down...");
-                cancellation_token.cancel();
+                runner_shutdown.cancel();
             }
         }
 

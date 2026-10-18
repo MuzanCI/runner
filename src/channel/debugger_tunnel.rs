@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use muzanci_observability::TError;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::combine_into_byte_stream;
@@ -10,7 +11,6 @@ use tokio_util::sync::CancellationToken;
 
 use muzanci_config::config::DebugSessionId;
 use muzanci_transport::channel::ChannelType;
-use muzanci_transport::mux::MuxHandle;
 
 use crate::RunnerState;
 use crate::ssh::server::ServerHandler;
@@ -66,10 +66,10 @@ impl DebuggerTunnel {
         channel_rx: ChannelReceiver,
         channel_closed: CancellationToken,
         reply_tx: oneshot::Sender<()>,
-    ) -> anyhow::Result<()> {
-        let cancellation_token = self.runner_state.cancellation_token.clone();
+    ) -> Result<(), TError> {
+        let runner_shutdown = self.runner_state.runner_shutdown();
         tokio::select! {
-            _ = cancellation_token.cancelled() => {
+            _ = runner_shutdown.cancelled() => {
                 tracing::info!("DebuggerTunnel received cancellation signal.");
                 Ok(())
             }
@@ -98,7 +98,7 @@ impl DebuggerTunnel {
         self,
         mut channel_rx: ChannelReceiver,
         reply_tx: oneshot::Sender<()>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TError> {
         self.create_debug_tunnel(&mut channel_rx).await?;
         tracing::info!("Created debug tunnel");
 
@@ -112,7 +112,7 @@ impl DebuggerTunnel {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn create_debug_tunnel(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<()> {
+    async fn create_debug_tunnel(&self, channel_rx: &mut ChannelReceiver) -> Result<(), TError> {
         self.channel_tx
             .send(Message::DebuggerTunnel(
                 DebuggerTunnelMessage::CreateDebugTunnelRequest {
@@ -125,19 +125,19 @@ impl DebuggerTunnel {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::DebuggerTunnel(DebuggerTunnelMessage::CreateDebugTunnelResponse {
                     result,
-                }) => result.map_err(|e| anyhow::anyhow!(e)),
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                }) => result.map_err(|e| TError::new(&e.to_string())),
+                _ => Err(TError::new("Unexpected message type")),
             })?;
 
         Ok(())
     }
 
     #[tracing::instrument(skip_all)]
-    async fn start_ssh_server(&self, channel_rx: ChannelReceiver) -> anyhow::Result<()> {
+    async fn start_ssh_server(&self, channel_rx: ChannelReceiver) -> Result<(), TError> {
         let private_key = russh::keys::PrivateKey::random(
             &mut russh::keys::key::safe_rng(),
             russh::keys::Algorithm::Ed25519,

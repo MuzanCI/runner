@@ -1,13 +1,17 @@
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::LocalBoxFuture;
+use muzanci_observability::TError;
 use muzanci_transport::message::KillReason;
 use std::collections::HashMap;
 use std::os::unix::process::ExitStatusExt;
 use std::sync::Arc;
+use tokio::io::Join;
 use tokio::join;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::task::AbortHandle;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use muzanci_config::config::StepConfig;
@@ -58,12 +62,13 @@ enum ItemResult {
 
 impl Worker {
     pub fn spawn(
+        join_set: &mut JoinSet<Result<(), TError>>,
         runner_state: Arc<RunnerState>,
         killed: CancellationToken,
         task_id: TaskId,
         permit: AssignmentCapacityPermit,
-    ) -> WorkerHandle {
-        let handle = tokio::spawn(async move {
+    ) -> AbortHandle {
+        join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
                 .open_channel(ChannelType::Worker)
@@ -78,10 +83,7 @@ impl Worker {
             }
             .run(killed, channel_closed, channel_rx)
             .await
-            .unwrap();
-        });
-
-        WorkerHandle { handle }
+        })
     }
 
     async fn run(
@@ -89,8 +91,8 @@ impl Worker {
         killed: CancellationToken,
         channel_closed: CancellationToken,
         channel_rx: ChannelReceiver,
-    ) -> anyhow::Result<()> {
-        let runner_stopped = self.runner_state.cancellation_token();
+    ) -> Result<(), TError> {
+        let runner_shutdown = self.runner_state.runner_shutdown();
 
         tokio::select! {
             _ = killed.cancelled() => {
@@ -99,7 +101,7 @@ impl Worker {
             _ = channel_closed.cancelled() => {
                 Ok(())
             }
-            _ = runner_stopped.cancelled() => {
+            _ = runner_shutdown.cancelled() => {
                 Ok(())
             }
             result = self.main(channel_rx) => {
@@ -108,7 +110,7 @@ impl Worker {
         }
     }
 
-    async fn main(self, mut channel_rx: ChannelReceiver) -> anyhow::Result<()> {
+    async fn main(self, mut channel_rx: ChannelReceiver) -> Result<(), TError> {
         let task_config = self.start_task(&mut channel_rx).await?;
 
         let sandbox = {
@@ -155,7 +157,7 @@ impl Worker {
         self.complete_task(&mut channel_rx).await
     }
 
-    async fn start_task(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<TaskConfig> {
+    async fn start_task(&self, channel_rx: &mut ChannelReceiver) -> Result<TaskConfig, TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::StartTaskRequest {
                 runner_id: self.runner_state.runner_id,
@@ -166,12 +168,12 @@ impl Worker {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::Worker(WorkerMessage::StartTaskResponse { result }) => {
-                    result.map_err(|e| anyhow::anyhow!(e))
+                    result.map_err(|e| TError::new(&e.to_string()))
                 }
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                _ => Err(TError::new("Unexpected message type")),
             })
     }
 
@@ -181,7 +183,7 @@ impl Worker {
         sandbox: Arc<dyn Sandbox>,
         step_index: StepIndex,
         step: StepConfig,
-    ) -> anyhow::Result<ItemResult> {
+    ) -> Result<ItemResult, TError> {
         self.start_item(channel_rx, step_index).await?;
 
         let envs = {
@@ -207,7 +209,9 @@ impl Worker {
                 (Some(code), None) => ExitStatus::Code(code),
                 (None, Some(signal)) => ExitStatus::Signal(signal),
                 (code, signal) => {
-                    anyhow::bail!("Unexpected exit status: code={code:?} signal={signal:?}")
+                    return Err(TError::new(&format!(
+                        "Unexpected exit status: code={code:?} signal={signal:?}"
+                    )));
                 }
             }
         };
@@ -239,7 +243,7 @@ impl Worker {
         }
     }
 
-    async fn complete_task(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<()> {
+    async fn complete_task(&self, channel_rx: &mut ChannelReceiver) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::CompleteTaskRequest {
                 runner_id: self.runner_state.runner_id,
@@ -250,16 +254,16 @@ impl Worker {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::Worker(WorkerMessage::CompleteTaskResponse { result }) => {
-                    result.map_err(|e| anyhow::anyhow!(e))
+                    result.map_err(|e| TError::new(&e.to_string()))
                 }
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                _ => Err(TError::new("Unexpected message type")),
             })
     }
 
-    async fn fail_task(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<()> {
+    async fn fail_task(&self, channel_rx: &mut ChannelReceiver) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::FailTaskRequest {
                 runner_id: self.runner_state.runner_id,
@@ -270,12 +274,12 @@ impl Worker {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::Worker(WorkerMessage::FailTaskResponse { result }) => {
-                    result.map_err(|e| anyhow::anyhow!(e))
+                    result.map_err(|e| TError::new(&e.to_string()))
                 }
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                _ => Err(TError::new("Unexpected message type")),
             })
     }
 
@@ -283,7 +287,7 @@ impl Worker {
         &self,
         channel_rx: &mut ChannelReceiver,
         step_index: StepIndex,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::StartItemRequest {
                 runner_id: self.runner_state.runner_id,
@@ -295,12 +299,12 @@ impl Worker {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::Worker(WorkerMessage::StartItemResponse { result }) => {
-                    result.map_err(|e| anyhow::anyhow!(e))
+                    result.map_err(|e| TError::new(&e.to_string()))
                 }
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                _ => Err(TError::new("Unexpected message type")),
             })
     }
 
@@ -308,7 +312,7 @@ impl Worker {
         &self,
         channel_rx: &mut ChannelReceiver,
         step_index: StepIndex,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::CompleteItemRequest {
                 runner_id: self.runner_state.runner_id,
@@ -320,12 +324,12 @@ impl Worker {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::Worker(WorkerMessage::CompleteItemResponse { result }) => {
-                    result.map_err(|e| anyhow::anyhow!(e))
+                    result.map_err(|e| TError::new(&e.to_string()))
                 }
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                _ => Err(TError::new("Unexpected message type")),
             })
     }
 
@@ -334,7 +338,7 @@ impl Worker {
         channel_rx: &mut ChannelReceiver,
         step_index: StepIndex,
         reason: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::FailItemRequest {
                 runner_id: self.runner_state.runner_id,
@@ -347,12 +351,12 @@ impl Worker {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::Worker(WorkerMessage::FailItemResponse { result }) => {
-                    result.map_err(|e| anyhow::anyhow!(e))
+                    result.map_err(|e| TError::new(&e.to_string()))
                 }
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                _ => Err(TError::new("Unexpected message type")),
             })
     }
 }
@@ -404,10 +408,10 @@ impl WorkerItemOutput {
         WorkerStepOutputHandle { handle }
     }
 
-    async fn run(&mut self) -> anyhow::Result<()> {
-        let cancellation_token = self.runner_state.cancellation_token.clone();
+    async fn run(&mut self) -> Result<(), TError> {
+        let runner_shutdown = self.runner_state.runner_shutdown.clone();
         tokio::select! {
-            _ = cancellation_token.cancelled() => {
+            _ = runner_shutdown.cancelled() => {
                 eprintln!("WorkerStepOutput received cancellation signal.");
                 Ok(())
             }
@@ -418,7 +422,7 @@ impl WorkerItemOutput {
         }
     }
 
-    async fn main(&mut self) -> anyhow::Result<()> {
+    async fn main(&mut self) -> Result<(), TError> {
         while let Some(output) = self.output_rx.recv().await {
             let result = self
                 .channel_tx
@@ -432,7 +436,9 @@ impl WorkerItemOutput {
 
             if let Err(e) = result {
                 tracing::error!("Failed to send worker step process output: {}", e);
-                anyhow::bail!("Failed to send worker step process output: {}", e);
+                return Err(TError::new(&format!(
+                    "Failed to send worker step process output: {e}",
+                )));
             }
         }
         Ok(())

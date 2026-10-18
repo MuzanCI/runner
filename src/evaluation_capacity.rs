@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use muzanci_observability::TError;
 use tokio::sync::Notify;
 use tokio::sync::futures::Notified;
 
@@ -35,13 +36,14 @@ impl SharedEvaluationCapacity {
     pub async fn reserve(
         &self,
         amount: EvaluationCapacity,
-    ) -> anyhow::Result<EvaluationCapacityPermit> {
+    ) -> Result<EvaluationCapacityPermit, TError> {
         let mut capacity = self.capacity.lock().unwrap();
         if *capacity < amount {
-            anyhow::bail!(EvaluationCapacityError::NotEnoughCapacity {
+            let e = EvaluationCapacityError::NotEnoughCapacity {
                 available: *capacity,
                 requested: amount,
-            });
+            };
+            return Err(e.into());
         }
 
         *capacity -= amount;

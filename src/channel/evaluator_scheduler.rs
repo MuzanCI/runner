@@ -1,4 +1,7 @@
+use muzanci_observability::TError;
 use std::sync::Arc;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
@@ -7,7 +10,6 @@ use muzanci_transport::message::EvaluatorSchedulerMessage;
 use muzanci_transport::message::Message;
 use muzanci_transport::message::TriggerId;
 use muzanci_transport::message::WaitingTrigger;
-use tokio_util::sync::CancellationToken;
 
 use crate::RunnerState;
 use crate::channel::evaluator::Evaluator;
@@ -30,6 +32,8 @@ impl Future for EvaluatorSchedulerHandle {
 pub struct EvaluatorScheduler {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
+    channel_rx: ChannelReceiver,
+    join_set: JoinSet<Result<(), TError>>,
 }
 
 impl EvaluatorScheduler {
@@ -40,52 +44,70 @@ impl EvaluatorScheduler {
                 .open_channel(ChannelType::EvaluatorScheduler)
                 .await
                 .unwrap();
+
+            let join_set = JoinSet::new();
+
             EvaluatorScheduler {
                 runner_state,
                 channel_tx,
+                channel_rx,
+                join_set,
             }
-            .run(channel_rx, channel_closed)
+            .main(channel_closed)
             .await
             .unwrap();
         });
+
         EvaluatorSchedulerHandle { handle }
     }
 
-    async fn run(
-        self,
-        channel_rx: ChannelReceiver,
-        channel_closed: CancellationToken,
-    ) -> anyhow::Result<()> {
+    async fn main(mut self, channel_closed: CancellationToken) -> Result<(), TError> {
         tracing::info!("EvaluatorScheduler started running.");
-        let cancellation_token = self.runner_state.cancellation_token.clone();
-        tokio::select! {
-            _ = cancellation_token.cancelled() => {
-                tracing::info!("EvaluatorScheduler received cancellation signal.");
-                Ok(())
-            }
 
-            _ = channel_closed.cancelled() => {
-                tracing::info!("Channel closed. Stopping EvaluatorScheduler.");
-                Ok(())
-            }
+        let cancelled_fut = {
+            let runner_shutdown = self.runner_state.runner_shutdown();
 
-            result = self.main(channel_rx) => {
-                match result {
-                    Ok(_) => {
-                        tracing::info!("EvaluatorScheduler finished running.");
+            async move {
+                tokio::select! {
+                    _ = runner_shutdown.cancelled() => {
+                        tracing::info!("EvaluatorScheduler received runner shutdown signal.");
                     }
-                    Err(e) => {
-                        tracing::error!("EvaluatorScheduler encountered an error: {:?}", e);
+                    _ = channel_closed.cancelled() => {
+                        tracing::info!("Channel closed. Stopping EvaluatorScheduler.");
                     }
                 }
-                Ok(())
+            }
+        };
+
+        tokio::select! {
+            _ = cancelled_fut => {
+                while let Some(result) = self.join_set.join_next().await {
+                    tracing::info!("Waiting for EvaluatorScheduler subtasks to finish...");
+
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
+                            tracing::error!("EvaluatorScheduler subtask error: {e:?}");
+                        }
+                        Err(e) => {
+                            tracing::error!("EvaluatorScheduler join error: {e:?}");
+                        }
+                    }
+
+                    tracing::info!("All subtasks finished. Stopping EvaluatorScheduler.");
+                }
+            }
+            result = self.run() => {
+                result?;
             }
         }
+
+        Ok(())
     }
 
-    async fn main(self, mut channel_rx: ChannelReceiver) -> anyhow::Result<()> {
+    async fn run(&mut self) -> Result<(), TError> {
         loop {
-            let triggers = self.fetch_waiting_triggers(&mut channel_rx).await?;
+            let triggers = self.fetch_waiting_triggers().await?;
 
             // Iterate over triggers and attempt to reserve until capacity is reached or no more triggers are available.
             for trigger in triggers {
@@ -102,13 +124,12 @@ impl EvaluatorScheduler {
                     }
                 };
 
-                match self
-                    .reserve_trigger(&mut channel_rx, trigger.trigger_id)
-                    .await
-                {
+                match self.reserve_trigger(trigger.trigger_id).await {
                     Ok(()) => {
                         tracing::info!("Successfully reserved trigger {:?}", trigger);
+
                         Evaluator::spawn(
+                            &mut self.join_set,
                             self.runner_state.clone(),
                             trigger.trigger_id,
                             trigger.capacity,
@@ -132,10 +153,7 @@ impl EvaluatorScheduler {
     }
 
     // TODO: Add filters for waiting triggers.
-    async fn fetch_waiting_triggers(
-        &self,
-        channel_rx: &mut ChannelReceiver,
-    ) -> anyhow::Result<Vec<WaitingTrigger>> {
+    async fn fetch_waiting_triggers(&mut self) -> Result<Vec<WaitingTrigger>, TError> {
         tracing::info!("Fetching waiting triggers from the server.");
         self.channel_tx
             .send(Message::EvaluatorScheduler(
@@ -145,27 +163,23 @@ impl EvaluatorScheduler {
             ))
             .await?;
 
-        channel_rx
+        self.channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::EvaluatorScheduler(
                     EvaluatorSchedulerMessage::FetchWaitingTriggersResponse { result },
-                ) => result.map_err(|e| anyhow::anyhow!(e)),
+                ) => result.map_err(|e| TError::new(&e.to_string())),
                 _ => {
                     tracing::error!("Unexpected response: {:?}", response);
-                    Err(anyhow::anyhow!("Unexpected response"))
+                    Err(TError::new("Unexpected response"))
                 }
             })
     }
 
     // Uses the reserve and commit pattern for cancellation safety.
-    async fn reserve_trigger(
-        &self,
-        channel_rx: &mut ChannelReceiver,
-        trigger_id: TriggerId,
-    ) -> anyhow::Result<()> {
+    async fn reserve_trigger(&mut self, trigger_id: TriggerId) -> Result<(), TError> {
         self.channel_tx
             .send(Message::EvaluatorScheduler(
                 EvaluatorSchedulerMessage::ReserveTriggerRequest {
@@ -175,17 +189,17 @@ impl EvaluatorScheduler {
             ))
             .await?;
 
-        channel_rx
+        self.channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::EvaluatorScheduler(
                     EvaluatorSchedulerMessage::ReserveTriggerResponse { result },
-                ) => result.map_err(|e| anyhow::anyhow!(e)),
+                ) => result.map_err(|e| TError::new(&e.to_string())),
                 _ => {
                     tracing::error!("Unexpected response: {:?}", response);
-                    Err(anyhow::anyhow!("Unexpected response"))
+                    Err(TError::new("Unexpected response"))
                 }
             })
     }

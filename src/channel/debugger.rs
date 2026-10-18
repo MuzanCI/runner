@@ -1,10 +1,13 @@
 use muzanci_config::config::ImageConfig;
+use muzanci_observability::TError;
 use sha2::Digest;
 use sha2::Sha256;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
+use tokio::task::AbortHandle;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -30,21 +33,6 @@ use crate::sandbox::SandboxId;
 #[error("{0}")]
 pub struct DebuggerError(String);
 
-pub struct DebuggerHandle {
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl Future for DebuggerHandle {
-    type Output = Result<(), tokio::task::JoinError>;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.handle).poll(cx)
-    }
-}
-
 pub struct Debugger {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
@@ -57,16 +45,18 @@ pub struct Debugger {
 
 impl Debugger {
     pub fn spawn(
+        join_set: &mut JoinSet<Result<(), TError>>,
         runner_state: Arc<RunnerState>,
         debug_session_id: DebugSessionId,
         permit: AssignmentCapacityPermit,
-    ) -> DebuggerHandle {
-        let handle = tokio::spawn(async move {
+    ) -> AbortHandle {
+        join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
                 .open_channel(ChannelType::Debugger)
                 .await
                 .unwrap();
+
             Debugger {
                 runner_state,
                 channel_tx,
@@ -76,22 +66,20 @@ impl Debugger {
                 diff_hasher: None,
                 _permit: permit,
             }
-            .run(channel_rx, channel_closed)
+            .main(channel_rx, channel_closed)
             .await
-            .unwrap();
-        });
-        DebuggerHandle { handle }
+        })
     }
 
     #[tracing::instrument(skip_all)]
-    async fn run(
+    async fn main(
         self,
         channel_rx: ChannelReceiver,
         channel_closed: CancellationToken,
-    ) -> anyhow::Result<()> {
-        let cancellation_token = self.runner_state.cancellation_token.clone();
+    ) -> Result<(), TError> {
+        let runner_shutdown = self.runner_state.runner_shutdown();
         tokio::select! {
-            _ = cancellation_token.cancelled() => {
+            _ = runner_shutdown.cancelled() => {
                 tracing::info!("Debugger received cancellation signal.");
                 Ok(())
             }
@@ -99,14 +87,14 @@ impl Debugger {
                 tracing::info!("Channel closed, stopping Debugger.");
                 Ok(())
             }
-            result = self.main(channel_rx) => {
+            result = self.run(channel_rx) => {
                 result
             }
         }
     }
 
     #[tracing::instrument(skip_all)]
-    async fn main(mut self, mut channel_rx: ChannelReceiver) -> anyhow::Result<()> {
+    async fn run(mut self, mut channel_rx: ChannelReceiver) -> Result<(), TError> {
         self.connect_debugger(&mut channel_rx).await?;
         loop {
             match channel_rx.recv().await {
@@ -122,7 +110,7 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn connect_debugger(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<()> {
+    async fn connect_debugger(&self, channel_rx: &mut ChannelReceiver) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Debugger(DebuggerMessage::ConnectDebuggerRequest {
                 runner_id: self.runner_state.runner_id,
@@ -133,17 +121,17 @@ impl Debugger {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::Debugger(DebuggerMessage::ConnectDebuggerResponse { result }) => {
-                    result.map_err(|e| anyhow::anyhow!(e))
+                    result.map_err(|e| TError::new(&e.to_string()))
                 }
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                _ => Err(TError::new("Unexpected message type")),
             })
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_message(&mut self, message: Message) -> anyhow::Result<()> {
+    async fn handle_message(&mut self, message: Message) -> Result<(), TError> {
         let message = match message {
             Message::DebugClient(msg) => msg,
             _ => Err(DebuggerError(format!("unexpected message: {:?}", message)))?,
@@ -174,7 +162,7 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_create_sandbox_request(&mut self, image: ImageConfig) -> anyhow::Result<()> {
+    async fn handle_create_sandbox_request(&mut self, image: ImageConfig) -> Result<(), TError> {
         let result = self.create_sandbox(image).await.map_err(|e| e.to_string());
 
         self.channel_tx
@@ -187,7 +175,7 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn create_sandbox(&mut self, image: ImageConfig) -> anyhow::Result<()> {
+    async fn create_sandbox(&mut self, image: ImageConfig) -> Result<(), TError> {
         let sandbox_config = SandboxConfig {
             sandbox_id: SandboxId::now_v7(),
             image,
@@ -210,7 +198,7 @@ impl Debugger {
         &self,
         url: Url,
         branch: GitBranch,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TError> {
         let result = self
             .checkout_branch(url, branch)
             .await
@@ -226,7 +214,7 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn checkout_branch(&self, url: Url, branch: GitBranch) -> anyhow::Result<()> {
+    async fn checkout_branch(&self, url: Url, branch: GitBranch) -> Result<(), TError> {
         let sandbox = self
             .sandbox
             .as_ref()
@@ -247,7 +235,7 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_start_diff_upload_request(&mut self) -> anyhow::Result<()> {
+    async fn handle_start_diff_upload_request(&mut self) -> Result<(), TError> {
         let result = self.start_diff_upload().await.map_err(|e| e.to_string());
 
         self.channel_tx
@@ -260,14 +248,14 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn start_diff_upload(&mut self) -> anyhow::Result<()> {
+    async fn start_diff_upload(&mut self) -> Result<(), TError> {
         self.diff_file = Some(NamedTempFile::new()?);
         self.diff_hasher = Some(Sha256::new());
         Ok(())
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_upload_diff_chunk_request(&mut self, chunk: Vec<u8>) -> anyhow::Result<()> {
+    async fn handle_upload_diff_chunk_request(&mut self, chunk: Vec<u8>) -> Result<(), TError> {
         let result = self
             .upload_diff_chunk(chunk)
             .await
@@ -282,12 +270,12 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn upload_diff_chunk(&mut self, chunk: Vec<u8>) -> anyhow::Result<()> {
+    async fn upload_diff_chunk(&mut self, chunk: Vec<u8>) -> Result<(), TError> {
         {
             let diff_hasher = self
                 .diff_hasher
                 .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("diff upload has not been started"))?;
+                .ok_or_else(|| TError::new("diff upload has not been started"))?;
             diff_hasher.update(&chunk);
         }
 
@@ -295,7 +283,7 @@ impl Debugger {
             let diff_file = self
                 .diff_file
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("diff upload has not been started"))?;
+                .ok_or_else(|| TError::new("diff upload has not been started"))?;
 
             let file = diff_file.reopen()?;
             tokio::fs::File::from_std(file).write_all(&chunk).await?;
@@ -308,7 +296,7 @@ impl Debugger {
     async fn handle_complete_diff_upload_request(
         &mut self,
         checksum: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TError> {
         let result = self
             .complete_diff_upload(checksum)
             .await
@@ -323,22 +311,22 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn complete_diff_upload(&mut self, checksum: String) -> anyhow::Result<()> {
+    async fn complete_diff_upload(&mut self, checksum: String) -> Result<(), TError> {
         let diff_hasher = self
             .diff_hasher
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("diff upload has not been started"))?;
+            .ok_or_else(|| TError::new("diff upload has not been started"))?;
         let digest = hex::encode(diff_hasher.finalize_reset());
         tracing::info!("Diff digest [{}]", digest);
         if digest != checksum {
-            anyhow::bail!("diff file checksum mismatch");
+            return Err(TError::new("diff file checksum mismatch"));
         }
 
         Ok(())
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_apply_diff_request(&self) -> anyhow::Result<()> {
+    async fn handle_apply_diff_request(&self) -> Result<(), TError> {
         let result = self.apply_diff().await.map_err(|e| e.to_string());
         self.channel_tx
             .send(Message::DebugClient(
@@ -350,16 +338,16 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn apply_diff(&self) -> anyhow::Result<()> {
+    async fn apply_diff(&self) -> Result<(), TError> {
         let sandbox = self
             .sandbox
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("sandbox not available"))?;
+            .ok_or_else(|| TError::new("sandbox not available"))?;
 
         let diff_file = self
             .diff_file
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("diff file not available"))?;
+            .ok_or_else(|| TError::new("diff file not available"))?;
 
         {
             let git_client = GitClient::try_default()?;
@@ -370,7 +358,7 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_start_shell_request(&self, step: StepConfig) -> anyhow::Result<()> {
+    async fn handle_start_shell_request(&self, step: StepConfig) -> Result<(), TError> {
         let result = self.start_shell(step).await.map_err(|e| e.to_string());
         self.channel_tx
             .send(Message::DebugClient(
@@ -382,7 +370,7 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn start_shell(&self, _step: StepConfig) -> anyhow::Result<()> {
+    async fn start_shell(&self, _step: StepConfig) -> Result<(), TError> {
         // TODO: Setup step image.
 
         let (reply_tx, reply_rx) = oneshot::channel();

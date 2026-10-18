@@ -1,4 +1,5 @@
 use muzanci_config::config::ImageConfig;
+use muzanci_observability::TError;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,7 +19,9 @@ use muzanci_runner::sandbox::zfs_image_store::ZfsPool;
 use muzanci_transport::message::ProcessOutput;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), TError> {
+    let _guard = muzanci_observability::init_tracing().unwrap();
+
     let root_dir = PathBuf::from("/tmp/muzanci_runner/root_dir");
     std::fs::create_dir_all(&root_dir)?;
 

@@ -1,5 +1,8 @@
+use muzanci_observability::TError;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::task::AbortHandle;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use muzanci_config::config::Config;
@@ -16,21 +19,6 @@ use crate::RunnerState;
 use crate::evaluation_capacity::EvaluationCapacity;
 use crate::evaluation_capacity::EvaluationCapacityPermit;
 
-pub struct EvaluatorHandle {
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl Future for EvaluatorHandle {
-    type Output = Result<(), tokio::task::JoinError>;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.handle).poll(cx)
-    }
-}
-
 pub struct Evaluator {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
@@ -41,17 +29,19 @@ pub struct Evaluator {
 
 impl Evaluator {
     pub fn spawn(
+        join_set: &mut JoinSet<Result<(), TError>>,
         runner_state: Arc<RunnerState>,
         trigger_id: TriggerId,
         capacity: EvaluationCapacity,
         permit: EvaluationCapacityPermit,
-    ) -> EvaluatorHandle {
-        let handle = tokio::spawn(async move {
+    ) -> AbortHandle {
+        join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
                 .open_channel(ChannelType::Evaluator)
                 .await
                 .unwrap();
+
             Evaluator {
                 runner_state,
                 channel_tx,
@@ -61,20 +51,18 @@ impl Evaluator {
             }
             .run(channel_rx, channel_closed)
             .await
-            .unwrap();
-        });
-        EvaluatorHandle { handle }
+        })
     }
 
     async fn run(
         self,
         channel_rx: ChannelReceiver,
         channel_closed: CancellationToken,
-    ) -> anyhow::Result<()> {
-        let cancellation_token = self.runner_state.cancellation_token.clone();
+    ) -> Result<(), TError> {
+        let runner_shutdown = self.runner_state.runner_shutdown();
         tokio::select! {
-            _ = cancellation_token.cancelled() => {
-                tracing::info!("Evaluator received cancellation signal.");
+            _ = runner_shutdown.cancelled() => {
+                tracing::info!("Evaluator received runner shutdown signal.");
                 Ok(())
             }
 
@@ -89,7 +77,7 @@ impl Evaluator {
         }
     }
 
-    async fn main(self, mut channel_rx: ChannelReceiver) -> anyhow::Result<()> {
+    async fn main(self, mut channel_rx: ChannelReceiver) -> Result<(), TError> {
         let config = self.start(&mut channel_rx).await?;
         match self.evaluate(&config).await {
             Ok(config) => self.complete(&mut channel_rx, config).await,
@@ -97,7 +85,7 @@ impl Evaluator {
         }
     }
 
-    async fn start(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<TriggerConfig> {
+    async fn start(&self, channel_rx: &mut ChannelReceiver) -> Result<TriggerConfig, TError> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::StartRequest {
                 runner_id: self.runner_state.runner_id,
@@ -108,16 +96,16 @@ impl Evaluator {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::Evaluator(EvaluatorMessage::StartResponse { result }) => {
-                    result.map_err(|e| anyhow::anyhow!(e))
+                    result.map_err(|e| TError::new(&e.to_string()))
                 }
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                _ => Err(TError::new("Unexpected message type")),
             })
     }
 
-    async fn evaluate(&self, config: &TriggerConfig) -> anyhow::Result<Config> {
+    async fn evaluate(&self, config: &TriggerConfig) -> Result<Config, TError> {
         let evaluator_dir = tempfile::tempdir_in(&self.runner_state.evaluator_dir_root)?;
 
         {
@@ -150,7 +138,7 @@ impl Evaluator {
         &self,
         channel_rx: &mut ChannelReceiver,
         config: Config,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::CompleteRequest {
                 runner_id: self.runner_state.runner_id,
@@ -162,16 +150,16 @@ impl Evaluator {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::Evaluator(EvaluatorMessage::CompleteResponse { result }) => {
-                    result.map_err(|e| anyhow::anyhow!(e))
+                    result.map_err(|e| TError::new(&e.to_string()))
                 }
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                _ => Err(TError::new("Unexpected message type")),
             })
     }
 
-    async fn fail(&self, channel_rx: &mut ChannelReceiver, reason: String) -> anyhow::Result<()> {
+    async fn fail(&self, channel_rx: &mut ChannelReceiver, reason: String) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::FailRequest {
                 runner_id: self.runner_state.runner_id,
@@ -183,12 +171,12 @@ impl Evaluator {
         channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::Evaluator(EvaluatorMessage::FailResponse { result }) => {
-                    result.map_err(|e| anyhow::anyhow!(e))
+                    result.map_err(|e| TError::new(&e.to_string()))
                 }
-                _ => Err(anyhow::anyhow!("Unexpected message type")),
+                _ => Err(TError::new("Unexpected message type")),
             })
     }
 }

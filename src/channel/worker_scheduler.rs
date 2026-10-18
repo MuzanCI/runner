@@ -1,4 +1,7 @@
+use muzanci_observability::TError;
 use std::sync::Arc;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
@@ -7,8 +10,6 @@ use muzanci_transport::message::Message;
 use muzanci_transport::message::TaskId;
 use muzanci_transport::message::WaitingTask;
 use muzanci_transport::message::WorkerSchedulerMessage;
-use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
 
 use crate::RunnerState;
 use crate::channel::worker::Worker;
@@ -32,6 +33,8 @@ impl Future for WorkerSchedulerHandle {
 pub struct WorkerScheduler {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
+    channel_rx: ChannelReceiver,
+    join_set: JoinSet<Result<(), TError>>,
 }
 
 impl WorkerScheduler {
@@ -42,52 +45,71 @@ impl WorkerScheduler {
                 .open_channel(ChannelType::WorkerScheduler)
                 .await
                 .unwrap();
+
+            let join_set = JoinSet::new();
+
             WorkerScheduler {
                 runner_state,
                 channel_tx,
+                channel_rx,
+                join_set,
             }
-            .run(channel_rx, channel_closed)
+            .main(channel_closed)
             .await
             .unwrap();
         });
+
         WorkerSchedulerHandle { handle }
     }
 
-    async fn run(
-        self,
-        channel_rx: ChannelReceiver,
-        channel_closed: CancellationToken,
-    ) -> anyhow::Result<()> {
+    async fn main(mut self, channel_closed: CancellationToken) -> Result<(), TError> {
         tracing::info!("WorkerScheduler started running.");
-        let cancellation_token = self.runner_state.cancellation_token.clone();
-        tokio::select! {
-            _ = cancellation_token.cancelled() => {
-                tracing::info!("WorkerScheduler received cancellation signal. Stopping WorkerScheduler.");
-                Ok(())
-            }
 
-            _ = channel_closed.cancelled() => {
-                tracing::info!("Channel closed while scheduling workers. Stopping WorkerScheduler.");
-                Ok(())
-            }
+        let cancelled_fut = {
+            let runner_shutdown = self.runner_state.runner_shutdown();
 
-            result = self.main(channel_rx) => {
-                match result {
-                    Ok(_) => {
-                        tracing::info!("WorkerScheduler finished running.");
+            async move {
+                tokio::select! {
+                    _ = runner_shutdown.cancelled() => {
+                        tracing::info!("WorkerScheduler received runner shutdown signal.");
                     }
-                    Err(e) => {
-                        tracing::error!("WorkerScheduler encountered an error: {:?}", e);
+                    _ = channel_closed.cancelled() => {
+                        tracing::info!("Channel closed. Stopping WorkerScheduler.");
                     }
                 }
-                Ok(())
+            }
+        };
+
+        tokio::select! {
+            _ = cancelled_fut => {
+                tracing::info!("Waiting for subtasks to finish...");
+
+                while let Some(result) = self.join_set.join_next().await {
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
+                            tracing::error!("WorkerScheduler subtask error: {e:?}");
+                        }
+                        Err(e) => {
+                            tracing::error!("WorkerScheduler join error: {e:?}");
+                        }
+                    }
+                }
+
+                tracing::info!("All subtasks finished. Stopping WorkerScheduler.");
+            }
+
+            result = self.run() => {
+                result?;
             }
         }
+
+        Ok(())
     }
 
-    async fn main(self, mut channel_rx: ChannelReceiver) -> anyhow::Result<()> {
+    async fn run(&mut self) -> Result<(), TError> {
         loop {
-            let tasks = self.fetch_waiting_tasks(&mut channel_rx).await?;
+            let tasks = self.fetch_waiting_tasks().await?;
 
             // Iterate over tasks and attempt to reserve until capacity is reached or no more tasks are available.
             for task in tasks {
@@ -104,18 +126,26 @@ impl WorkerScheduler {
                     }
                 };
 
-                match self.reserve_task(&mut channel_rx, task.task_id).await {
+                match self.reserve_task(task.task_id).await {
                     Ok(()) => {
                         tracing::info!("Successfully reserved task {:?}", task);
 
                         let killed = CancellationToken::new();
+
                         WorkerKiller::spawn(
+                            &mut self.join_set,
                             self.runner_state.clone(),
                             killed.clone(),
                             task.task_id,
                         );
 
-                        Worker::spawn(self.runner_state.clone(), killed, task.task_id, permit);
+                        Worker::spawn(
+                            &mut self.join_set,
+                            self.runner_state.clone(),
+                            killed,
+                            task.task_id,
+                            permit,
+                        );
                     }
                     Err(e) => {
                         tracing::error!("Failed to reserve task {:?}: {:?}", task, e);
@@ -135,10 +165,7 @@ impl WorkerScheduler {
     }
 
     // TODO: Add filters for waiting tasks.
-    async fn fetch_waiting_tasks(
-        &self,
-        channel_rx: &mut ChannelReceiver,
-    ) -> anyhow::Result<Vec<WaitingTask>> {
+    async fn fetch_waiting_tasks(&mut self) -> Result<Vec<WaitingTask>, TError> {
         tracing::info!("Fetching waiting tasks from the server.");
         self.channel_tx
             .send(Message::WorkerScheduler(
@@ -148,27 +175,23 @@ impl WorkerScheduler {
             ))
             .await?;
 
-        channel_rx
+        self.channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::WorkerScheduler(WorkerSchedulerMessage::FetchWaitingTasksResponse {
                     result,
-                }) => result.map_err(|e| anyhow::anyhow!(e)),
+                }) => result.map_err(|e| TError::new(&e.to_string())),
                 _ => {
                     tracing::error!("Unexpected response: {:?}", response);
-                    Err(anyhow::anyhow!("Unexpected response"))
+                    Err(TError::new("Unexpected response"))
                 }
             })
     }
 
     // Uses the reserve and commit pattern for cancellation safety.
-    async fn reserve_task(
-        &self,
-        channel_rx: &mut ChannelReceiver,
-        task_id: TaskId,
-    ) -> anyhow::Result<()> {
+    async fn reserve_task(&mut self, task_id: TaskId) -> Result<(), TError> {
         self.channel_tx
             .send(Message::WorkerScheduler(
                 WorkerSchedulerMessage::ReserveTaskRequest {
@@ -178,17 +201,17 @@ impl WorkerScheduler {
             ))
             .await?;
 
-        channel_rx
+        self.channel_rx
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Channel closed"))
+            .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
                 Message::WorkerScheduler(WorkerSchedulerMessage::ReserveTaskResponse {
                     result,
-                }) => result.map_err(|e| anyhow::anyhow!(e)),
+                }) => result.map_err(|e| TError::new(&e.to_string())),
                 _ => {
                     eprintln!("Unexpected response: {:?}", response);
-                    Err(anyhow::anyhow!("Unexpected response"))
+                    Err(TError::new("Unexpected response"))
                 }
             })
     }

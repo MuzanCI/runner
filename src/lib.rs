@@ -4,6 +4,7 @@ use std::sync::Arc;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::Request;
+use muzanci_observability::TError;
 use tokio_util::sync::CancellationToken;
 
 use muzanci_transport::MUZANCI_RUNNER_ID_HEADER;
@@ -21,14 +22,13 @@ use crate::sandbox::Sandboxer;
 pub mod assignment_capacity;
 pub mod channel;
 pub mod evaluation_capacity;
-pub mod logging;
 pub mod sandbox;
 pub mod signal_receiver;
 pub mod ssh;
 
 #[derive(Clone)]
 pub struct RunnerState {
-    cancellation_token: CancellationToken,
+    runner_shutdown: CancellationToken,
     runner_id: RunnerId,
     mux_handle: MuxHandle,
     shared_evaluation_capacity: SharedEvaluationCapacity,
@@ -39,7 +39,7 @@ pub struct RunnerState {
 
 impl RunnerState {
     pub fn new(
-        cancellation_token: CancellationToken,
+        runner_shutdown: CancellationToken,
         runner_id: RunnerId,
         mux_handle: MuxHandle,
         shared_evaluation_capacity: SharedEvaluationCapacity,
@@ -48,7 +48,7 @@ impl RunnerState {
         evaluator_dir_root: PathBuf,
     ) -> Self {
         Self {
-            cancellation_token,
+            runner_shutdown,
             runner_id,
             mux_handle,
             shared_evaluation_capacity,
@@ -58,8 +58,8 @@ impl RunnerState {
         }
     }
 
-    pub fn cancellation_token(&self) -> CancellationToken {
-        self.cancellation_token.clone()
+    pub fn runner_shutdown(&self) -> CancellationToken {
+        self.runner_shutdown.clone()
     }
 }
 
@@ -68,7 +68,7 @@ pub async fn connect(
     secret: &str,
     account_id: Uuid,
     cancellation_token: CancellationToken,
-) -> anyhow::Result<(RunnerId, MuxHandle)> {
+) -> Result<(RunnerId, MuxHandle), TError> {
     let server_stream = {
         let stream = tokio::net::TcpStream::connect(hostname).await?;
         stream.set_nodelay(true)?;
@@ -98,10 +98,10 @@ pub async fn connect(
     let response = send_request.send_request(request).await?;
 
     if response.status() != http::StatusCode::SWITCHING_PROTOCOLS {
-        return Err(anyhow::anyhow!(
+        return Err(TError::new(&format!(
             "Failed to upgrade connection. Server responded with status: {}",
-            response.status()
-        ));
+            response.status(),
+        )));
     }
 
     let runner_id = extract_runner_id(response.headers())?;
@@ -123,11 +123,11 @@ pub async fn connect(
     Ok((runner_id, mux_handle))
 }
 
-fn extract_runner_id(headers: &HeaderMap<HeaderValue>) -> anyhow::Result<RunnerId> {
+fn extract_runner_id(headers: &HeaderMap<HeaderValue>) -> Result<RunnerId, TError> {
     let val = headers
         .get(MUZANCI_RUNNER_ID_HEADER)
-        .ok_or_else(|| anyhow::anyhow!("missing header [{}]", MUZANCI_RUNNER_ID_HEADER))?;
-    let s = val.to_str().map_err(|e| anyhow::anyhow!(e))?;
-    let uuid = Uuid::try_parse(s).map_err(|e| anyhow::anyhow!(e))?;
+        .ok_or_else(|| TError::new(&format!("missing header [{}]", MUZANCI_RUNNER_ID_HEADER)))?;
+    let s = val.to_str().map_err(|e| TError::new(&e.to_string()))?;
+    let uuid = Uuid::try_parse(s).map_err(|e| TError::new(&e.to_string()))?;
     Ok(uuid.into())
 }
