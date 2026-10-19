@@ -1,15 +1,9 @@
-use futures::FutureExt;
-use futures::future::BoxFuture;
-use futures::future::LocalBoxFuture;
 use muzanci_observability::TError;
-use muzanci_transport::message::KillReason;
 use std::collections::HashMap;
 use std::os::unix::process::ExitStatusExt;
 use std::sync::Arc;
-use tokio::io::Join;
 use tokio::join;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -81,36 +75,33 @@ impl Worker {
                 task_id,
                 _permit: permit,
             }
-            .run(killed, channel_closed, channel_rx)
+            .main(killed, channel_closed, channel_rx)
             .await
         })
     }
 
-    async fn run(
+    async fn main(
         self,
         killed: CancellationToken,
         channel_closed: CancellationToken,
         channel_rx: ChannelReceiver,
     ) -> Result<(), TError> {
-        let runner_shutdown = self.runner_state.runner_shutdown();
-
         tokio::select! {
             _ = killed.cancelled() => {
+                tracing::info!("Killed, stopping Worker.");
                 Ok(())
             }
             _ = channel_closed.cancelled() => {
+                tracing::info!("Channel closed, stopping Worker.");
                 Ok(())
             }
-            _ = runner_shutdown.cancelled() => {
-                Ok(())
-            }
-            result = self.main(channel_rx) => {
+            result = self.run(channel_rx) => {
                 result
             }
         }
     }
 
-    async fn main(self, mut channel_rx: ChannelReceiver) -> Result<(), TError> {
+    async fn run(self, mut channel_rx: ChannelReceiver) -> Result<(), TError> {
         let task_config = self.start_task(&mut channel_rx).await?;
 
         let sandbox = {

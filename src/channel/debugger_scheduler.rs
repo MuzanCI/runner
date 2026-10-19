@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::RunnerState;
 use crate::channel::debugger::Debugger;
+use crate::channel::debugger_killer::DebuggerKiller;
 
 pub struct DebuggerSchedulerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -108,10 +109,10 @@ impl DebuggerScheduler {
 
     async fn run(&mut self) -> Result<(), TError> {
         loop {
-            let debugs = self.fetch_waiting_debugs().await?;
+            let waiting_debug_sessions = self.fetch_waiting_debug_sessions().await?;
 
             // Iterate over debugs and attempt to reserve until capacity is reached or no more debugs are available.
-            for waiting_debug in debugs {
+            for waiting_debug_session in waiting_debug_sessions {
                 let capacity = 1;
                 let permit = match self
                     .runner_state
@@ -125,19 +126,36 @@ impl DebuggerScheduler {
                         continue;
                     }
                 };
-                match self.reserve_debug(waiting_debug.debug_session_id).await {
+                match self
+                    .reserve_debug(waiting_debug_session.debug_session_id)
+                    .await
+                {
                     Ok(()) => {
-                        tracing::info!("Successfully reserved debug {:?}", waiting_debug);
+                        tracing::info!("Successfully reserved debug {:?}", waiting_debug_session);
+
+                        let killed = CancellationToken::new();
+
+                        DebuggerKiller::spawn(
+                            &mut self.join_set,
+                            self.runner_state.clone(),
+                            killed.clone(),
+                            waiting_debug_session.debug_session_id,
+                        );
 
                         Debugger::spawn(
                             &mut self.join_set,
                             self.runner_state.clone(),
-                            waiting_debug.debug_session_id,
+                            killed,
+                            waiting_debug_session.debug_session_id,
                             permit,
                         );
                     }
                     Err(e) => {
-                        tracing::error!("Failed to reserve debug {:?}: {:?}", waiting_debug, e);
+                        tracing::error!(
+                            "Failed to reserve debug {:?}: {:?}",
+                            waiting_debug_session,
+                            e
+                        );
                         drop(permit);
                     }
                 }
@@ -156,7 +174,7 @@ impl DebuggerScheduler {
     }
 
     // TODO: Add filters for waiting debugs.
-    async fn fetch_waiting_debugs(&mut self) -> Result<Vec<WaitingDebugSession>, TError> {
+    async fn fetch_waiting_debug_sessions(&mut self) -> Result<Vec<WaitingDebugSession>, TError> {
         tracing::info!("Fetching waiting debugs from the server.");
         self.channel_tx
             .send(Message::DebuggerScheduler(

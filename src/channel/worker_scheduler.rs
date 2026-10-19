@@ -109,26 +109,30 @@ impl WorkerScheduler {
 
     async fn run(&mut self) -> Result<(), TError> {
         loop {
-            let tasks = self.fetch_waiting_tasks().await?;
+            let waiting_tasks = self.fetch_waiting_tasks().await?;
 
             // Iterate over tasks and attempt to reserve until capacity is reached or no more tasks are available.
-            for task in tasks {
+            for waiting_task in waiting_tasks {
                 let permit = match self
                     .runner_state
                     .shared_assignment_capacity_handle
-                    .reserve_low(task.capacity)
+                    .reserve_low(waiting_task.capacity)
                     .await
                 {
                     Ok(permit) => permit,
                     Err(e) => {
-                        tracing::error!("Failed to reserve capacity {:?}: {:?}", task.capacity, e);
+                        tracing::error!(
+                            "Failed to reserve capacity {:?}: {:?}",
+                            waiting_task.capacity,
+                            e
+                        );
                         continue;
                     }
                 };
 
-                match self.reserve_task(task.task_id).await {
+                match self.reserve_task(waiting_task.task_id).await {
                     Ok(()) => {
-                        tracing::info!("Successfully reserved task {:?}", task);
+                        tracing::info!("Successfully reserved waiting_task {:?}", waiting_task);
 
                         let killed = CancellationToken::new();
 
@@ -136,19 +140,19 @@ impl WorkerScheduler {
                             &mut self.join_set,
                             self.runner_state.clone(),
                             killed.clone(),
-                            task.task_id,
+                            waiting_task.task_id,
                         );
 
                         Worker::spawn(
                             &mut self.join_set,
                             self.runner_state.clone(),
                             killed,
-                            task.task_id,
+                            waiting_task.task_id,
                             permit,
                         );
                     }
                     Err(e) => {
-                        tracing::error!("Failed to reserve task {:?}: {:?}", task, e);
+                        tracing::error!("Failed to reserve task {:?}: {:?}", waiting_task, e);
                         drop(permit);
                     }
                 }

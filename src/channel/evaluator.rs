@@ -31,6 +31,7 @@ impl Evaluator {
     pub fn spawn(
         join_set: &mut JoinSet<Result<(), TError>>,
         runner_state: Arc<RunnerState>,
+        killed: CancellationToken,
         trigger_id: TriggerId,
         capacity: EvaluationCapacity,
         permit: EvaluationCapacityPermit,
@@ -49,20 +50,20 @@ impl Evaluator {
                 _capacity: capacity,
                 _permit: permit,
             }
-            .run(channel_rx, channel_closed)
+            .main(killed, channel_closed, channel_rx)
             .await
         })
     }
 
-    async fn run(
+    async fn main(
         self,
-        channel_rx: ChannelReceiver,
+        killed: CancellationToken,
         channel_closed: CancellationToken,
+        channel_rx: ChannelReceiver,
     ) -> Result<(), TError> {
-        let runner_shutdown = self.runner_state.runner_shutdown();
         tokio::select! {
-            _ = runner_shutdown.cancelled() => {
-                tracing::info!("Evaluator received runner shutdown signal.");
+            _ = killed.cancelled() => {
+                tracing::info!("Killed, stopping Evaluator.");
                 Ok(())
             }
 
@@ -71,13 +72,13 @@ impl Evaluator {
                 Ok(())
             }
 
-            result = self.main(channel_rx) => {
+            result = self.run(channel_rx) => {
                 result
             }
         }
     }
 
-    async fn main(self, mut channel_rx: ChannelReceiver) -> Result<(), TError> {
+    async fn run(self, mut channel_rx: ChannelReceiver) -> Result<(), TError> {
         let config = self.start(&mut channel_rx).await?;
         match self.evaluate(&config).await {
             Ok(config) => self.complete(&mut channel_rx, config).await,

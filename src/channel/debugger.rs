@@ -47,6 +47,7 @@ impl Debugger {
     pub fn spawn(
         join_set: &mut JoinSet<Result<(), TError>>,
         runner_state: Arc<RunnerState>,
+        killed: CancellationToken,
         debug_session_id: DebugSessionId,
         permit: AssignmentCapacityPermit,
     ) -> AbortHandle {
@@ -66,7 +67,7 @@ impl Debugger {
                 diff_hasher: None,
                 _permit: permit,
             }
-            .main(channel_rx, channel_closed)
+            .main(killed, channel_closed, channel_rx)
             .await
         })
     }
@@ -74,13 +75,13 @@ impl Debugger {
     #[tracing::instrument(skip_all)]
     async fn main(
         self,
-        channel_rx: ChannelReceiver,
+        killed: CancellationToken,
         channel_closed: CancellationToken,
+        channel_rx: ChannelReceiver,
     ) -> Result<(), TError> {
-        let runner_shutdown = self.runner_state.runner_shutdown();
         tokio::select! {
-            _ = runner_shutdown.cancelled() => {
-                tracing::info!("Debugger received cancellation signal.");
+            _ = killed.cancelled() => {
+                tracing::info!("Killed, stopping Debugger.");
                 Ok(())
             }
             _ = channel_closed.cancelled() => {

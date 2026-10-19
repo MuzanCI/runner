@@ -13,6 +13,7 @@ use muzanci_transport::message::WaitingTrigger;
 
 use crate::RunnerState;
 use crate::channel::evaluator::Evaluator;
+use crate::channel::evaluator_killer::EvaluatorKiller;
 
 pub struct EvaluatorSchedulerHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -107,37 +108,51 @@ impl EvaluatorScheduler {
 
     async fn run(&mut self) -> Result<(), TError> {
         loop {
-            let triggers = self.fetch_waiting_triggers().await?;
+            let waiting_triggers = self.fetch_waiting_triggers().await?;
 
             // Iterate over triggers and attempt to reserve until capacity is reached or no more triggers are available.
-            for trigger in triggers {
+            for waiting_trigger in waiting_triggers {
                 let permit = match self
                     .runner_state
                     .shared_evaluation_capacity
-                    .reserve(trigger.capacity)
+                    .reserve(waiting_trigger.capacity)
                     .await
                 {
                     Ok(permit) => permit,
                     Err(e) => {
-                        tracing::error!("Failed to reserve capacity {:?}: {:?}", trigger, e);
+                        tracing::error!(
+                            "Failed to reserve capacity {:?}: {:?}",
+                            waiting_trigger,
+                            e
+                        );
                         continue;
                     }
                 };
 
-                match self.reserve_trigger(trigger.trigger_id).await {
+                match self.reserve_trigger(waiting_trigger.trigger_id).await {
                     Ok(()) => {
-                        tracing::info!("Successfully reserved trigger {:?}", trigger);
+                        tracing::info!("Successfully reserved trigger {:?}", waiting_trigger);
+
+                        let killed = CancellationToken::new();
+
+                        EvaluatorKiller::spawn(
+                            &mut self.join_set,
+                            self.runner_state.clone(),
+                            killed.clone(),
+                            waiting_trigger.trigger_id,
+                        );
 
                         Evaluator::spawn(
                             &mut self.join_set,
                             self.runner_state.clone(),
-                            trigger.trigger_id,
-                            trigger.capacity,
+                            killed,
+                            waiting_trigger.trigger_id,
+                            waiting_trigger.capacity,
                             permit,
                         );
                     }
                     Err(e) => {
-                        tracing::error!("Failed to reserve trigger {:?}: {:?}", trigger, e);
+                        tracing::error!("Failed to reserve trigger {:?}: {:?}", waiting_trigger, e);
                         drop(permit);
                     }
                 }

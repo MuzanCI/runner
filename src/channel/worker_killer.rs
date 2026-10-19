@@ -1,5 +1,6 @@
 use muzanci_observability::TError;
 use muzanci_transport::message::TaskId;
+use muzanci_transport::message::TaskStatus;
 use muzanci_transport::message::WorkerKillerMessage;
 use std::sync::Arc;
 use tokio::task::AbortHandle;
@@ -20,6 +21,7 @@ struct WorkerKillerError(String);
 pub struct WorkerKiller {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
+    channel_rx: ChannelReceiver,
     task_id: TaskId,
 }
 
@@ -40,39 +42,40 @@ impl WorkerKiller {
             WorkerKiller {
                 runner_state,
                 channel_tx,
+                channel_rx,
                 task_id,
             }
-            .run(killed, channel_closed, channel_rx)
+            .main(channel_closed, killed)
             .await
         })
     }
 
-    async fn run(
-        self,
-        killed: CancellationToken,
+    async fn main(
+        mut self,
         channel_closed: CancellationToken,
-        mut channel_rx: ChannelReceiver,
+        killed: CancellationToken,
     ) -> Result<(), TError> {
-        let runner_shutdown = self.runner_state.runner_shutdown();
-
         tokio::select! {
             _ = channel_closed.cancelled() => {
+                killed.cancel();
                 Ok(())
             }
-            _ = runner_shutdown.cancelled() => {
-                Ok(())
-            }
-            result = self.long_poll(&mut channel_rx) => {
-                if result.is_ok() {
-                    killed.cancel();
-                }
+            result = self.long_poll() => {
+                match result {
+                    Ok(status) => {
+                        if matches!(status, TaskStatus::Interrupted | TaskStatus::Disconnected | TaskStatus::TimedOut | TaskStatus::Canceled) {
+                            killed.cancel();
+                        }
 
-                result
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
             }
         }
     }
 
-    async fn long_poll(&self, channel_rx: &mut ChannelReceiver) -> Result<(), TError> {
+    async fn long_poll(&mut self) -> Result<TaskStatus, TError> {
         self.channel_tx
             .send(Message::WorkerKiller(WorkerKillerMessage::PollRequest {
                 runner_id: self.runner_state.runner_id,
@@ -80,13 +83,20 @@ impl WorkerKiller {
             }))
             .await?;
 
-        channel_rx
+        let message = self
+            .channel_rx
             .recv()
             .await
-            .ok_or_else(|| TError::new("Channel closed"))
-            .and_then(|response| match response {
-                Message::WorkerKiller(WorkerKillerMessage::PollResponse { .. }) => Ok(()),
-                _ => Err(TError::new(&format!("Unexpected response: {response:?}"))),
-            })
+            .ok_or_else(|| WorkerKillerError("Channel closed".to_string()))?;
+
+        match message {
+            Message::WorkerKiller(WorkerKillerMessage::PollResponse { result: Ok(status) }) => {
+                Ok(status)
+            }
+            Message::WorkerKiller(WorkerKillerMessage::PollResponse { result: Err(e) }) => {
+                Err(WorkerKillerError(e).into())
+            }
+            _ => Err(WorkerKillerError(format!("Unexpected response: {message:?}")).into()),
+        }
     }
 }
