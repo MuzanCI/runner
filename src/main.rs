@@ -1,5 +1,7 @@
+use muzanci_observability::TracingConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -18,18 +20,23 @@ use muzanci_runner::signal_receiver::SignalReceiver;
 
 #[tokio::main]
 async fn main() {
-    let _guard = muzanci_observability::init_tracing().unwrap();
+    muzanci_observability::init_tracing(TracingConfig::default()).unwrap();
 
-    let cancellation_token = CancellationToken::new();
-    let hostname = std::env::var("MUZANCI_SERVER_HOSTNAME_AND_PORT").unwrap();
-    let secret = std::env::var("MUZANCI_SECRET").unwrap();
+    // Configuration
+    let hostname = std::env::var("MUZANCI_SERVER_HOSTNAME_AND_PORT")
+        .expect("MUZANCI_SERVER_HOSTNAME_AND_PORT is not set");
+    let secret = std::env::var("MUZANCI_PERSONAL_ACCESS_TOKEN_SECRET")
+        .expect("MUZANCI_PERSONAL_ACCESS_TOKEN_SECRET is not set");
     let account_id = {
-        let account_id_str = std::env::var("MUZANCI_ACCOUNT_ID").unwrap();
+        let account_id_str =
+            std::env::var("MUZANCI_ACCOUNT_ID").expect("MUZANCI_ACCOUNT_ID is not set");
         Uuid::try_parse(&account_id_str).unwrap()
     };
 
+    // Runner registration
+    let runner_shutdown = CancellationToken::new();
     let (runner_id, mux_handle) =
-        muzanci_runner::connect(&hostname, &secret, account_id, cancellation_token.clone())
+        muzanci_runner::connect(&hostname, &secret, account_id, runner_shutdown.clone())
             .await
             .unwrap();
     tracing::info!("Assigned runner ID [{}]", runner_id);
@@ -52,7 +59,7 @@ async fn main() {
     let evaluator_dir_root = PathBuf::from("/tmp/evaluators");
 
     let runner_state = Arc::new(RunnerState::new(
-        cancellation_token,
+        runner_shutdown,
         runner_id,
         mux_handle,
         evaluation_capacity,
@@ -61,16 +68,22 @@ async fn main() {
         evaluator_dir_root,
     ));
 
-    let signal_receiver_handle = SignalReceiver::spawn(runner_state.clone());
-    let evaluator_scheduler_handle = EvaluatorScheduler::spawn(runner_state.clone());
-    let worker_scheduler_handle = WorkerScheduler::spawn(runner_state.clone());
-    let debugger_scheduler_handle = DebuggerScheduler::spawn(runner_state.clone());
+    let mut join_set = JoinSet::new();
 
-    // TODO: Add cancellation token for graceful shutdown.
-    let _ = tokio::join!(
-        signal_receiver_handle,
-        evaluator_scheduler_handle,
-        worker_scheduler_handle,
-        debugger_scheduler_handle
-    );
+    SignalReceiver::spawn(&mut join_set, runner_state.clone());
+    EvaluatorScheduler::spawn(&mut join_set, runner_state.clone());
+    WorkerScheduler::spawn(&mut join_set, runner_state.clone());
+    DebuggerScheduler::spawn(&mut join_set, runner_state.clone());
+
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::error!("{e}");
+            }
+            Err(e) => {
+                tracing::error!("Join error: {e:?}");
+            }
+        }
+    }
 }

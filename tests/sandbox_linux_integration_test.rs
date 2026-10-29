@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use muzanci_config::config::ImageConfig;
 use muzanci_observability::TError;
+use muzanci_observability::TracingConfig;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -21,7 +22,7 @@ use muzanci_transport::message::ProcessOutput;
 
 #[tokio::main]
 async fn main() -> Result<(), TError> {
-    let _guard = muzanci_observability::init_tracing().unwrap();
+    muzanci_observability::init_tracing(TracingConfig::default()).unwrap();
 
     let root_dir = PathBuf::from("/tmp/muzanci_runner/root_dir");
     std::fs::create_dir_all(&root_dir)?;

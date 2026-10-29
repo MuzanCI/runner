@@ -61,8 +61,13 @@ impl RunnerState {
     pub fn runner_shutdown(&self) -> CancellationToken {
         self.runner_shutdown.clone()
     }
+
+    pub fn runner_id(&self) -> RunnerId {
+        self.runner_id
+    }
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn connect(
     hostname: &str,
     secret: &str,

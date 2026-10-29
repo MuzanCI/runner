@@ -1,7 +1,9 @@
 use muzanci_observability::TError;
 use std::sync::Arc;
+use tokio::task::AbortHandle;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
@@ -15,21 +17,6 @@ use crate::RunnerState;
 use crate::channel::evaluator::Evaluator;
 use crate::channel::evaluator_killer::EvaluatorKiller;
 
-pub struct EvaluatorSchedulerHandle {
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl Future for EvaluatorSchedulerHandle {
-    type Output = Result<(), tokio::task::JoinError>;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.handle).poll(cx)
-    }
-}
-
 pub struct EvaluatorScheduler {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
@@ -38,30 +25,35 @@ pub struct EvaluatorScheduler {
 }
 
 impl EvaluatorScheduler {
-    pub fn spawn(runner_state: Arc<RunnerState>) -> EvaluatorSchedulerHandle {
-        let handle = tokio::spawn(async move {
+    pub fn spawn(
+        join_set: &mut JoinSet<Result<(), TError>>,
+        runner_state: Arc<RunnerState>,
+    ) -> AbortHandle {
+        join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
                 .open_channel(ChannelType::EvaluatorScheduler)
-                .await
-                .unwrap();
-
-            let join_set = JoinSet::new();
+                .await?;
 
             EvaluatorScheduler {
                 runner_state,
                 channel_tx,
                 channel_rx,
-                join_set,
+                join_set: JoinSet::new(),
             }
             .main(channel_closed)
             .await
-            .unwrap();
-        });
-
-        EvaluatorSchedulerHandle { handle }
+        })
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "evaluator_scheduler",
+        fields(
+            id = Uuid::now_v7().to_string(),
+            runner_id = self.runner_state.runner_id().to_string(),
+        )
+    )]
     async fn main(mut self, channel_closed: CancellationToken) -> Result<(), TError> {
         tracing::info!("EvaluatorScheduler started running.");
 
@@ -81,7 +73,12 @@ impl EvaluatorScheduler {
         };
 
         tokio::select! {
+            biased;
             _ = cancelled_fut => {
+                self.runner_state.runner_shutdown().cancel();
+
+                tracing::info!("Waiting for subtasks to finish...");
+
                 while let Some(result) = self.join_set.join_next().await {
                     tracing::info!("Waiting for EvaluatorScheduler subtasks to finish...");
 
@@ -106,6 +103,7 @@ impl EvaluatorScheduler {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn run(&mut self) -> Result<(), TError> {
         loop {
             let waiting_triggers = self.fetch_waiting_triggers().await?;
@@ -168,6 +166,7 @@ impl EvaluatorScheduler {
     }
 
     // TODO: Add filters for waiting triggers.
+    #[tracing::instrument(skip_all)]
     async fn fetch_waiting_triggers(&mut self) -> Result<Vec<WaitingTrigger>, TError> {
         tracing::info!("Fetching waiting triggers from the server.");
         self.channel_tx
@@ -194,6 +193,7 @@ impl EvaluatorScheduler {
     }
 
     // Uses the reserve and commit pattern for cancellation safety.
+    #[tracing::instrument(skip_all)]
     async fn reserve_trigger(&mut self, trigger_id: TriggerId) -> Result<(), TError> {
         self.channel_tx
             .send(Message::EvaluatorScheduler(

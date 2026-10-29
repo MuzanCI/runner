@@ -1,7 +1,9 @@
 use muzanci_observability::TError;
 use std::sync::Arc;
+use tokio::task::AbortHandle;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
@@ -15,21 +17,6 @@ use crate::RunnerState;
 use crate::channel::worker::Worker;
 use crate::channel::worker_killer::WorkerKiller;
 
-pub struct WorkerSchedulerHandle {
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl Future for WorkerSchedulerHandle {
-    type Output = Result<(), tokio::task::JoinError>;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.handle).poll(cx)
-    }
-}
-
 pub struct WorkerScheduler {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
@@ -38,30 +25,35 @@ pub struct WorkerScheduler {
 }
 
 impl WorkerScheduler {
-    pub fn spawn(runner_state: Arc<RunnerState>) -> WorkerSchedulerHandle {
-        let handle = tokio::spawn(async move {
+    pub fn spawn(
+        join_set: &mut JoinSet<Result<(), TError>>,
+        runner_state: Arc<RunnerState>,
+    ) -> AbortHandle {
+        join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
                 .open_channel(ChannelType::WorkerScheduler)
-                .await
-                .unwrap();
-
-            let join_set = JoinSet::new();
+                .await?;
 
             WorkerScheduler {
                 runner_state,
                 channel_tx,
                 channel_rx,
-                join_set,
+                join_set: JoinSet::new(),
             }
             .main(channel_closed)
             .await
-            .unwrap();
-        });
-
-        WorkerSchedulerHandle { handle }
+        })
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "worker_scheduler",
+        fields(
+            id = Uuid::now_v7().to_string(),
+            runner_id = self.runner_state.runner_id().to_string(),
+        )
+    )]
     async fn main(mut self, channel_closed: CancellationToken) -> Result<(), TError> {
         tracing::info!("WorkerScheduler started running.");
 
@@ -81,7 +73,10 @@ impl WorkerScheduler {
         };
 
         tokio::select! {
+            biased;
             _ = cancelled_fut => {
+                self.runner_state.runner_shutdown().cancel();
+
                 tracing::info!("Waiting for subtasks to finish...");
 
                 while let Some(result) = self.join_set.join_next().await {
