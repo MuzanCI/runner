@@ -7,7 +7,7 @@ use muzanci_observability::TError;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use crate::RunnerState;
+use crate::app::runner_state::RunnerState;
 
 #[derive(thiserror::Error, Debug)]
 pub enum SignalReceiverError {
@@ -35,7 +35,7 @@ impl SignalReceiver {
         name = "signal_receiver"
         fields(
             id = Uuid::now_v7().to_string(),
-            runner_id = self.runner_state.runner_id().to_string(),
+            runner_id = self.runner_state.runner_mux_handle().runner_id().to_string(),
         )
     )]
     async fn main(mut self) -> Result<(), TError> {

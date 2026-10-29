@@ -5,8 +5,10 @@ use std::sync::Arc;
 use tokio::join;
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
+use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use muzanci_config::config::StepConfig;
 use muzanci_config::config::StepIndex;
@@ -21,26 +23,11 @@ use muzanci_transport::message::TaskConfig;
 use muzanci_transport::message::TaskId;
 use muzanci_transport::message::WorkerMessage;
 
-use crate::RunnerState;
+use crate::app::runner_state::RunnerState;
 use crate::assignment_capacity::AssignmentCapacityPermit;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
 use crate::sandbox::SandboxId;
-
-pub struct WorkerHandle {
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl Future for WorkerHandle {
-    type Output = Result<(), tokio::task::JoinError>;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.handle).poll(cx)
-    }
-}
 
 pub struct Worker {
     runner_state: Arc<RunnerState>,
@@ -64,10 +51,9 @@ impl Worker {
     ) -> AbortHandle {
         join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
-                .mux_handle
-                .open_channel(ChannelType::Worker)
-                .await
-                .unwrap();
+                .runner_mux_handle()
+                .open_channel(ChannelType::DebugClient)
+                .await?;
 
             Worker {
                 runner_state,
@@ -80,6 +66,14 @@ impl Worker {
         })
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "worker",
+        fields(
+            id = Uuid::now_v7().to_string(),
+            server_id = self.runner_state.runner_mux_handle().runner_id().to_string(),
+        )
+    )]
     async fn main(
         self,
         killed: CancellationToken,
@@ -109,7 +103,7 @@ impl Worker {
                 sandbox_id: SandboxId::now_v7(),
                 image: task_config.image.clone(),
             };
-            self.runner_state.sandboxer.create(sandbox_config).await?
+            self.runner_state.sandboxer().create(sandbox_config).await?
         };
 
         {
@@ -151,7 +145,7 @@ impl Worker {
     async fn start_task(&self, channel_rx: &mut ChannelReceiver) -> Result<TaskConfig, TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::StartTaskRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 task_id: self.task_id,
             }))
             .await?;
@@ -209,7 +203,7 @@ impl Worker {
 
         self.channel_tx
             .send(Message::Worker(WorkerMessage::ItemProcessExitStatus {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 task_id: self.task_id,
                 step_index,
                 exit_status,
@@ -237,7 +231,7 @@ impl Worker {
     async fn complete_task(&self, channel_rx: &mut ChannelReceiver) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::CompleteTaskRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 task_id: self.task_id,
             }))
             .await?;
@@ -257,7 +251,7 @@ impl Worker {
     async fn fail_task(&self, channel_rx: &mut ChannelReceiver) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::FailTaskRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 task_id: self.task_id,
             }))
             .await?;
@@ -281,7 +275,7 @@ impl Worker {
     ) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::StartItemRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 task_id: self.task_id,
                 step_index,
             }))
@@ -306,7 +300,7 @@ impl Worker {
     ) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::CompleteItemRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 task_id: self.task_id,
                 step_index,
             }))
@@ -332,7 +326,7 @@ impl Worker {
     ) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::FailItemRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 task_id: self.task_id,
                 step_index,
                 reason,
@@ -352,21 +346,6 @@ impl Worker {
     }
 }
 
-pub struct WorkerStepOutputHandle {
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl Future for WorkerStepOutputHandle {
-    type Output = Result<(), tokio::task::JoinError>;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.handle).poll(cx)
-    }
-}
-
 pub struct WorkerItemOutput {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
@@ -382,25 +361,25 @@ impl WorkerItemOutput {
         task_id: TaskId,
         step_index: StepIndex,
         output_rx: mpsc::Receiver<ProcessOutput>,
-    ) -> WorkerStepOutputHandle {
-        let runner_state = runner_state.clone();
-        let handle = tokio::spawn(async move {
-            WorkerItemOutput {
-                runner_state,
-                channel_tx,
-                task_id,
-                step_index,
-                output_rx,
+    ) -> JoinHandle<Result<(), TError>> {
+        tokio::spawn({
+            let runner_state = runner_state.clone();
+            async move {
+                WorkerItemOutput {
+                    runner_state,
+                    channel_tx,
+                    task_id,
+                    step_index,
+                    output_rx,
+                }
+                .run()
+                .await
             }
-            .run()
-            .await
-            .unwrap();
-        });
-        WorkerStepOutputHandle { handle }
+        })
     }
 
     async fn run(&mut self) -> Result<(), TError> {
-        let runner_shutdown = self.runner_state.runner_shutdown.clone();
+        let runner_shutdown = self.runner_state.runner_shutdown();
         tokio::select! {
             _ = runner_shutdown.cancelled() => {
                 eprintln!("WorkerStepOutput received cancellation signal.");
@@ -418,7 +397,7 @@ impl WorkerItemOutput {
             let result = self
                 .channel_tx
                 .send(Message::Worker(WorkerMessage::ItemProcessOutput {
-                    runner_id: self.runner_state.runner_id,
+                    runner_id: self.runner_state.runner_mux_handle().runner_id(),
                     task_id: self.task_id,
                     step_index: self.step_index,
                     output,

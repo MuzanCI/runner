@@ -13,7 +13,7 @@ use muzanci_transport::message::TaskId;
 use muzanci_transport::message::WaitingTask;
 use muzanci_transport::message::WorkerSchedulerMessage;
 
-use crate::RunnerState;
+use crate::app::runner_state::RunnerState;
 use crate::channel::worker::Worker;
 use crate::channel::worker_killer::WorkerKiller;
 
@@ -31,7 +31,7 @@ impl WorkerScheduler {
     ) -> AbortHandle {
         join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
-                .mux_handle
+                .runner_mux_handle()
                 .open_channel(ChannelType::WorkerScheduler)
                 .await?;
 
@@ -51,7 +51,7 @@ impl WorkerScheduler {
         name = "worker_scheduler",
         fields(
             id = Uuid::now_v7().to_string(),
-            runner_id = self.runner_state.runner_id().to_string(),
+            runner_id = self.runner_state.runner_mux_handle().runner_id().to_string(),
         )
     )]
     async fn main(mut self, channel_closed: CancellationToken) -> Result<(), TError> {
@@ -110,7 +110,7 @@ impl WorkerScheduler {
             for waiting_task in waiting_tasks {
                 let permit = match self
                     .runner_state
-                    .shared_assignment_capacity_handle
+                    .assignment_capacity()
                     .reserve_low(waiting_task.capacity)
                     .await
                 {
@@ -156,10 +156,7 @@ impl WorkerScheduler {
             // TODO: Fix bug where scheduler does not check server again, even if capacity is available.
 
             // Wait for notification of available capacity before checking for tasks again.
-            self.runner_state
-                .shared_assignment_capacity_handle
-                .notified()
-                .await;
+            self.runner_state.assignment_capacity().notified().await;
         }
     }
 
@@ -169,7 +166,7 @@ impl WorkerScheduler {
         self.channel_tx
             .send(Message::WorkerScheduler(
                 WorkerSchedulerMessage::FetchWaitingTasksRequest {
-                    runner_id: self.runner_state.runner_id,
+                    runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 },
             ))
             .await?;
@@ -194,7 +191,7 @@ impl WorkerScheduler {
         self.channel_tx
             .send(Message::WorkerScheduler(
                 WorkerSchedulerMessage::ReserveTaskRequest {
-                    runner_id: self.runner_state.runner_id,
+                    runner_id: self.runner_state.runner_mux_handle().runner_id(),
                     task_id,
                 },
             ))

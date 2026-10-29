@@ -1,4 +1,5 @@
 use muzanci_observability::TracingConfig;
+use muzanci_runner::runner_mux::RunnerMuxHandle;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -6,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use muzanci_image::reqwest_registry_client::ReqwestRegistryClient;
-use muzanci_runner::RunnerState;
+use muzanci_runner::app::runner_state::RunnerState;
 use muzanci_runner::assignment_capacity::SharedAssignmentCapacity;
 use muzanci_runner::channel::debugger_scheduler::DebuggerScheduler;
 use muzanci_runner::channel::evaluator_scheduler::EvaluatorScheduler;
@@ -23,23 +24,31 @@ async fn main() {
     muzanci_observability::init_tracing(TracingConfig::default()).unwrap();
 
     // Configuration
-    let hostname = std::env::var("MUZANCI_SERVER_HOSTNAME_AND_PORT")
+    let server_hostname = std::env::var("MUZANCI_SERVER_HOSTNAME_AND_PORT")
         .expect("MUZANCI_SERVER_HOSTNAME_AND_PORT is not set");
     let secret = std::env::var("MUZANCI_PERSONAL_ACCESS_TOKEN_SECRET")
         .expect("MUZANCI_PERSONAL_ACCESS_TOKEN_SECRET is not set");
     let account_id = {
         let account_id_str =
             std::env::var("MUZANCI_ACCOUNT_ID").expect("MUZANCI_ACCOUNT_ID is not set");
-        Uuid::try_parse(&account_id_str).unwrap()
+        Uuid::try_parse(&account_id_str).unwrap().into()
     };
 
     // Runner registration
     let runner_shutdown = CancellationToken::new();
-    let (runner_id, mux_handle) =
-        muzanci_runner::connect(&hostname, &secret, account_id, runner_shutdown.clone())
-            .await
-            .unwrap();
-    tracing::info!("Assigned runner ID [{}]", runner_id);
+    let runner_mux_handle = RunnerMuxHandle::new(
+        runner_shutdown.clone(),
+        &server_hostname,
+        &secret,
+        account_id,
+    )
+    .await
+    .unwrap();
+
+    tracing::info!(
+        runner_id = runner_mux_handle.runner_id().to_string(),
+        "runner.registered"
+    );
 
     let evaluation_capacity = SharedEvaluationCapacity::new(10);
     let assignment_capacity = SharedAssignmentCapacity::spawn(10);
@@ -60,8 +69,7 @@ async fn main() {
 
     let runner_state = Arc::new(RunnerState::new(
         runner_shutdown,
-        runner_id,
-        mux_handle,
+        runner_mux_handle,
         evaluation_capacity,
         assignment_capacity,
         sandboxer,

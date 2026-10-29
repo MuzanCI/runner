@@ -10,6 +10,7 @@ use tokio::task::AbortHandle;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+use uuid::Uuid;
 
 use muzanci_config::config::DebugSessionId;
 use muzanci_config::config::StepConfig;
@@ -22,7 +23,7 @@ use muzanci_transport::message::DebugClientMessage;
 use muzanci_transport::message::DebuggerMessage;
 use muzanci_transport::message::Message;
 
-use crate::RunnerState;
+use crate::app::runner_state::RunnerState;
 use crate::assignment_capacity::AssignmentCapacityPermit;
 use crate::channel::debugger_tunnel::DebuggerTunnel;
 use crate::sandbox::Sandbox;
@@ -53,7 +54,7 @@ impl Debugger {
     ) -> AbortHandle {
         join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
-                .mux_handle
+                .runner_mux_handle()
                 .open_channel(ChannelType::Debugger)
                 .await
                 .unwrap();
@@ -72,7 +73,14 @@ impl Debugger {
         })
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(
+        skip_all,
+        name = "debugger",
+        fields(
+            id = Uuid::now_v7().to_string(),
+            server_id = self.runner_state.runner_mux_handle().runner_id().to_string(),
+        )
+    )]
     async fn main(
         self,
         killed: CancellationToken,
@@ -114,7 +122,7 @@ impl Debugger {
     async fn connect_debugger(&self, channel_rx: &mut ChannelReceiver) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Debugger(DebuggerMessage::ConnectDebuggerRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 debug_session_id: self.debug_session_id,
             }))
             .await?;
@@ -182,7 +190,7 @@ impl Debugger {
             image,
         };
 
-        let sandbox = self.runner_state.sandboxer.create(sandbox_config).await?;
+        let sandbox = self.runner_state.sandboxer().create(sandbox_config).await?;
 
         tracing::info!(
             "Created sandbox at [{}]",

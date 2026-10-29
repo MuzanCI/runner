@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::task::AbortHandle;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use muzanci_config::config::Config;
 use muzanci_config::config::TriggerConfig;
@@ -15,7 +16,7 @@ use muzanci_transport::message::EvaluatorMessage;
 use muzanci_transport::message::Message;
 use muzanci_transport::message::TriggerId;
 
-use crate::RunnerState;
+use crate::app::runner_state::RunnerState;
 use crate::evaluation_capacity::EvaluationCapacity;
 use crate::evaluation_capacity::EvaluationCapacityPermit;
 
@@ -38,10 +39,9 @@ impl Evaluator {
     ) -> AbortHandle {
         join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
-                .mux_handle
+                .runner_mux_handle()
                 .open_channel(ChannelType::Evaluator)
-                .await
-                .unwrap();
+                .await?;
 
             Evaluator {
                 runner_state,
@@ -55,6 +55,14 @@ impl Evaluator {
         })
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "evaluator",
+        fields(
+            id = Uuid::now_v7().to_string(),
+            server_id = self.runner_state.runner_mux_handle().runner_id().to_string(),
+        )
+    )]
     async fn main(
         self,
         killed: CancellationToken,
@@ -89,7 +97,7 @@ impl Evaluator {
     async fn start(&self, channel_rx: &mut ChannelReceiver) -> Result<TriggerConfig, TError> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::StartRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 trigger_id: self.trigger_id,
             }))
             .await?;
@@ -107,7 +115,7 @@ impl Evaluator {
     }
 
     async fn evaluate(&self, config: &TriggerConfig) -> Result<Config, TError> {
-        let evaluator_dir = tempfile::tempdir_in(&self.runner_state.evaluator_dir_root)?;
+        let evaluator_dir = tempfile::tempdir_in(&self.runner_state.evaluator_dir_root())?;
 
         {
             let git_client = GitClient::try_default()?;
@@ -142,7 +150,7 @@ impl Evaluator {
     ) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::CompleteRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 trigger_id: self.trigger_id,
                 config,
             }))
@@ -163,7 +171,7 @@ impl Evaluator {
     async fn fail(&self, channel_rx: &mut ChannelReceiver, reason: String) -> Result<(), TError> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::FailRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 trigger_id: self.trigger_id,
                 reason,
             }))

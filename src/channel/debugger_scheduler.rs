@@ -13,7 +13,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::RunnerState;
+use crate::app::runner_state::RunnerState;
 use crate::channel::debugger::Debugger;
 use crate::channel::debugger_killer::DebuggerKiller;
 
@@ -31,7 +31,7 @@ impl DebuggerScheduler {
     ) -> AbortHandle {
         join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
-                .mux_handle
+                .runner_mux_handle()
                 .open_channel(ChannelType::DebuggerScheduler)
                 .await?;
 
@@ -51,7 +51,7 @@ impl DebuggerScheduler {
         name = "debugger_scheduler",
         fields(
             id = Uuid::now_v7().to_string(),
-            runner_id = self.runner_state.runner_id().to_string(),
+            runner_id = self.runner_state.runner_mux_handle().runner_id().to_string(),
         )
     )]
     async fn main(mut self, channel_closed: CancellationToken) -> Result<(), TError> {
@@ -102,6 +102,7 @@ impl DebuggerScheduler {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn run(&mut self) -> Result<(), TError> {
         loop {
             let waiting_debug_sessions = self.fetch_waiting_debug_sessions().await?;
@@ -111,7 +112,7 @@ impl DebuggerScheduler {
                 let capacity = 1;
                 let permit = match self
                     .runner_state
-                    .shared_assignment_capacity_handle
+                    .assignment_capacity()
                     .reserve_high(capacity)
                     .await
                 {
@@ -161,20 +162,18 @@ impl DebuggerScheduler {
                 "Waiting for available capacity before checking for waiting debugs again."
             );
             // TODO: Fix bug where scheduler does not check server again, even if capacity is available.
-            self.runner_state
-                .shared_assignment_capacity_handle
-                .notified()
-                .await;
+            self.runner_state.assignment_capacity().notified().await;
         }
     }
 
     // TODO: Add filters for waiting debugs.
+    #[tracing::instrument(skip_all)]
     async fn fetch_waiting_debug_sessions(&mut self) -> Result<Vec<WaitingDebugSession>, TError> {
         tracing::info!("Fetching waiting debugs from the server.");
         self.channel_tx
             .send(Message::DebuggerScheduler(
                 DebuggerSchedulerMessage::FetchWaitingDebugSessionsRequest {
-                    runner_id: self.runner_state.runner_id,
+                    runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 },
             ))
             .await?;
@@ -195,11 +194,12 @@ impl DebuggerScheduler {
     }
 
     // Uses the reserve and commit pattern for cancellation safety.
+    #[tracing::instrument(skip_all)]
     async fn reserve_debug(&mut self, debug_session_id: DebugSessionId) -> Result<(), TError> {
         self.channel_tx
             .send(Message::DebuggerScheduler(
                 DebuggerSchedulerMessage::ReserveDebugSessionRequest {
-                    runner_id: self.runner_state.runner_id,
+                    runner_id: self.runner_state.runner_mux_handle().runner_id(),
                     debug_session_id,
                 },
             ))

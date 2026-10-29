@@ -13,7 +13,7 @@ use muzanci_transport::message::Message;
 use muzanci_transport::message::TriggerId;
 use muzanci_transport::message::WaitingTrigger;
 
-use crate::RunnerState;
+use crate::app::runner_state::RunnerState;
 use crate::channel::evaluator::Evaluator;
 use crate::channel::evaluator_killer::EvaluatorKiller;
 
@@ -31,8 +31,8 @@ impl EvaluatorScheduler {
     ) -> AbortHandle {
         join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
-                .mux_handle
-                .open_channel(ChannelType::EvaluatorScheduler)
+                .runner_mux_handle()
+                .open_channel(ChannelType::DebugClient)
                 .await?;
 
             EvaluatorScheduler {
@@ -51,7 +51,7 @@ impl EvaluatorScheduler {
         name = "evaluator_scheduler",
         fields(
             id = Uuid::now_v7().to_string(),
-            runner_id = self.runner_state.runner_id().to_string(),
+            runner_id = self.runner_state.runner_mux_handle().runner_id().to_string(),
         )
     )]
     async fn main(mut self, channel_closed: CancellationToken) -> Result<(), TError> {
@@ -112,7 +112,7 @@ impl EvaluatorScheduler {
             for waiting_trigger in waiting_triggers {
                 let permit = match self
                     .runner_state
-                    .shared_evaluation_capacity
+                    .evaluation_capacity()
                     .reserve(waiting_trigger.capacity)
                     .await
                 {
@@ -158,10 +158,7 @@ impl EvaluatorScheduler {
 
             // TODO: Fix bug where scheduler does not check server again, even if capacity is available.
             // Wait for notification of available capacity before checking for triggers again.
-            self.runner_state
-                .shared_evaluation_capacity
-                .notified()
-                .await;
+            self.runner_state.evaluation_capacity().notified().await;
         }
     }
 
@@ -172,7 +169,7 @@ impl EvaluatorScheduler {
         self.channel_tx
             .send(Message::EvaluatorScheduler(
                 EvaluatorSchedulerMessage::FetchWaitingTriggersRequest {
-                    runner_id: self.runner_state.runner_id,
+                    runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 },
             ))
             .await?;
@@ -198,7 +195,7 @@ impl EvaluatorScheduler {
         self.channel_tx
             .send(Message::EvaluatorScheduler(
                 EvaluatorSchedulerMessage::ReserveTriggerRequest {
-                    runner_id: self.runner_state.runner_id,
+                    runner_id: self.runner_state.runner_mux_handle().runner_id(),
                     trigger_id,
                 },
             ))

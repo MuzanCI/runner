@@ -6,13 +6,14 @@ use std::sync::Arc;
 use tokio::task::AbortHandle;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
 use muzanci_transport::message::Message;
 
-use crate::RunnerState;
+use crate::app::runner_state::RunnerState;
 
 #[derive(Debug, thiserror::Error)]
 #[error("WorkerKillerError: {0}")]
@@ -34,10 +35,9 @@ impl WorkerKiller {
     ) -> AbortHandle {
         join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
-                .mux_handle
-                .open_channel(ChannelType::WorkerKiller)
-                .await
-                .unwrap();
+                .runner_mux_handle()
+                .open_channel(ChannelType::DebugClient)
+                .await?;
 
             WorkerKiller {
                 runner_state,
@@ -50,6 +50,14 @@ impl WorkerKiller {
         })
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "worker_killer",
+        fields(
+            id = Uuid::now_v7().to_string(),
+            server_id = self.runner_state.runner_mux_handle().runner_id().to_string(),
+        )
+    )]
     async fn main(
         mut self,
         channel_closed: CancellationToken,
@@ -78,7 +86,7 @@ impl WorkerKiller {
     async fn long_poll(&mut self) -> Result<TaskStatus, TError> {
         self.channel_tx
             .send(Message::WorkerKiller(WorkerKillerMessage::PollRequest {
-                runner_id: self.runner_state.runner_id,
+                runner_id: self.runner_state.runner_mux_handle().runner_id(),
                 task_id: self.task_id,
             }))
             .await?;

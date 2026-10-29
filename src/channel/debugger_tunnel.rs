@@ -7,28 +7,15 @@ use muzanci_transport::channel::combine_into_byte_stream;
 use muzanci_transport::message::DebuggerTunnelMessage;
 use muzanci_transport::message::Message;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use muzanci_config::config::DebugSessionId;
 use muzanci_transport::channel::ChannelType;
+use uuid::Uuid;
 
-use crate::RunnerState;
+use crate::app::runner_state::RunnerState;
 use crate::ssh::server::ServerHandler;
-
-pub struct DebuggerTunnelHandle {
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl Future for DebuggerTunnelHandle {
-    type Output = Result<(), tokio::task::JoinError>;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.handle).poll(cx)
-    }
-}
 
 pub struct DebuggerTunnel {
     runner_state: Arc<RunnerState>,
@@ -41,27 +28,32 @@ impl DebuggerTunnel {
         runner_state: Arc<RunnerState>,
         debug_session_id: DebugSessionId,
         reply_tx: oneshot::Sender<()>,
-    ) -> DebuggerTunnelHandle {
-        let handle = tokio::spawn(async move {
+    ) -> JoinHandle<Result<(), TError>> {
+        tokio::spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
-                .mux_handle
+                .runner_mux_handle()
                 .open_channel(ChannelType::DebuggerTunnel)
-                .await
-                .unwrap();
+                .await?;
+
             DebuggerTunnel {
                 runner_state,
                 debug_session_id,
                 channel_tx,
             }
-            .run(channel_rx, channel_closed, reply_tx)
+            .main(channel_rx, channel_closed, reply_tx)
             .await
-            .unwrap();
-        });
-        DebuggerTunnelHandle { handle }
+        })
     }
 
-    #[tracing::instrument(skip_all)]
-    async fn run(
+    #[tracing::instrument(
+        skip_all,
+        name = "debugger_tunnel",
+        fields(
+            id = Uuid::now_v7().to_string(),
+            server_id = self.runner_state.runner_mux_handle().runner_id().to_string(),
+        )
+    )]
+    async fn main(
         self,
         channel_rx: ChannelReceiver,
         channel_closed: CancellationToken,
@@ -79,7 +71,7 @@ impl DebuggerTunnel {
                 Ok(())
             }
 
-            result = self.main(channel_rx, reply_tx) => {
+            result = self.run(channel_rx, reply_tx) => {
                 match result {
                     Ok(_) => {
                         tracing::info!("DebuggerTunnel finished running.");
@@ -94,7 +86,7 @@ impl DebuggerTunnel {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn main(
+    async fn run(
         self,
         mut channel_rx: ChannelReceiver,
         reply_tx: oneshot::Sender<()>,
@@ -116,7 +108,7 @@ impl DebuggerTunnel {
         self.channel_tx
             .send(Message::DebuggerTunnel(
                 DebuggerTunnelMessage::CreateDebugTunnelRequest {
-                    runner_id: self.runner_state.runner_id,
+                    runner_id: self.runner_state.runner_mux_handle().runner_id(),
                     debug_session_id: self.debug_session_id,
                 },
             ))
