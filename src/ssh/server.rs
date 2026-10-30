@@ -110,6 +110,7 @@ impl Handler for ServerHandler {
             .lock()
             .expect("SSH server handler processes lock is poisoned");
         if let Some(&pid) = processes.get(&channel) {
+            eprintln!("Received signal {signal_name:?}");
             let sig_num = match signal_name {
                 russh::Sig::INT => libc::SIGINT,
                 russh::Sig::TERM => libc::SIGTERM,
@@ -138,7 +139,6 @@ impl Handler for ServerHandler {
             }
         };
 
-        // 1. Confirm to client that the exec request was accepted
         session.request_success();
 
         // 2. Spawn the child shell process
@@ -157,7 +157,6 @@ impl Handler for ServerHandler {
             }
         };
 
-        // 3. Track PID for signal forwarding
         {
             let mut processes = self
                 .processes
@@ -166,36 +165,38 @@ impl Handler for ServerHandler {
             processes.insert(channel, child.id());
         }
 
-        let mut stdout = child.stdout.take().unwrap();
-        let mut stderr = child.stderr.take().unwrap();
+        let mut stdout = tokio::process::ChildStdout::from_std(child.stdout.take().unwrap())?;
+        let mut stderr = tokio::process::ChildStderr::from_std(child.stderr.take().unwrap())?;
 
         let handle = session.handle();
         let processes_mutex = self.processes.clone();
 
-        // 4. Stream I/O in a background Tokio task
         tokio::spawn(async move {
-            use std::io::Read;
-            let handle_out = handle.clone();
-            let stdout_task = tokio::spawn(async move {
-                let mut buf = [0u8; 4096];
-                while let Ok(n) = stdout.read(&mut buf) {
-                    if n == 0 {
-                        break;
+            use tokio::io::AsyncReadExt;
+
+            let stdout_task = tokio::spawn({
+                let handle = handle.clone();
+                async move {
+                    let mut buf = [0u8; 4096];
+                    while let Ok(n) = stdout.read(&mut buf).await {
+                        if n == 0 {
+                            break;
+                        }
+                        let _ = handle.data(channel, Vec::from(&buf[..n])).await;
                     }
-                    let _ = handle_out.data(channel, Vec::from(&buf[..n])).await;
                 }
             });
 
-            let handle_err = handle.clone();
-            let stderr_task = tokio::spawn(async move {
-                let mut buf = [0u8; 4096];
-                while let Ok(n) = stderr.read(&mut buf) {
-                    if n == 0 {
-                        break;
+            let stderr_task = tokio::spawn({
+                let handle = handle.clone();
+                async move {
+                    let mut buf = [0u8; 4096];
+                    while let Ok(n) = stderr.read(&mut buf).await {
+                        if n == 0 {
+                            break;
+                        }
+                        let _ = handle.extended_data(channel, 1, Vec::from(&buf[..n])).await;
                     }
-                    let _ = handle_err
-                        .extended_data(channel, 1, Vec::from(&buf[..n]))
-                        .await;
                 }
             });
 
@@ -207,7 +208,7 @@ impl Handler for ServerHandler {
                 Err(_) => 1,
             };
 
-            // 5. Send exit code and close channel
+            // Send exit code and close channel
             let _ = handle.exit_status_request(channel, exit_code).await;
             let _ = handle.close(channel).await;
 
@@ -263,11 +264,13 @@ impl Handler for ServerHandler {
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        tracing::warn!("[debug_client > debugger . stdin_process] n={}", data.len());
         if let Some(ref pty) = self.pty {
             write_channel_to_pty(pty, data)
                 .await
                 .map_err(russh::Error::from)?;
         }
+        tracing::warn!("[debug_client . debugger > stdin_process] n={}", data.len());
         Ok(())
     }
 }
@@ -311,7 +314,9 @@ impl Pty {
 
         // Spawn child process (`slave_fd` is closed automatically when `pty.slave` drops)
         let child = cmd.spawn()?;
-        let async_master = AsyncFd::new(pty.master)?;
+
+        // UNSAFE EXPLANATION: TODO
+        let async_master = unsafe { AsyncFd::register(pty.master)? };
 
         Ok((
             Self {

@@ -57,7 +57,7 @@ impl RunnerMuxHandle {
             .header(http::header::HOST, hostname)
             .header(http::header::CONNECTION, "Upgrade")
             .header(http::header::UPGRADE, MUZANCI_TRANSPORT_V1)
-            .header("x-muzanci-personal-access-token", secret.to_string())
+            .header("x-muzanci-personal-access-token-secret", secret.to_string())
             .header("x-muzanci-account-id", account_id.to_string())
             .body(http_body_util::Empty::<bytes::Bytes>::new())
             .unwrap();
@@ -110,6 +110,7 @@ impl RunnerMuxHandle {
         self.runner_id
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn open_channel(
         &self,
         channel_type: ChannelType,

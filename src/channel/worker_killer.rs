@@ -36,7 +36,7 @@ impl WorkerKiller {
         join_set.spawn(async move {
             let (channel_tx, channel_rx, channel_closed) = runner_state
                 .runner_mux_handle()
-                .open_channel(ChannelType::DebugClient)
+                .open_channel(ChannelType::WorkerKiller)
                 .await?;
 
             WorkerKiller {
