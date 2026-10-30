@@ -110,7 +110,7 @@ impl Handler for ServerHandler {
             .lock()
             .expect("SSH server handler processes lock is poisoned");
         if let Some(&pid) = processes.get(&channel) {
-            eprintln!("Received signal {signal_name:?}");
+            eprintln!("Received signal {signal_name:?} for pid {pid}");
             let sig_num = match signal_name {
                 russh::Sig::INT => libc::SIGINT,
                 russh::Sig::TERM => libc::SIGTERM,
@@ -118,8 +118,10 @@ impl Handler for ServerHandler {
                 russh::Sig::QUIT => libc::SIGQUIT,
                 _ => libc::SIGINT,
             };
+            eprintln!("pid as i32: {}", pid as i32);
             unsafe {
-                libc::kill(pid as i32, sig_num);
+                let result = libc::killpg(pid as i32, sig_num);
+                eprintln!("result: {}", result);
             }
         }
         Ok(())
@@ -145,6 +147,7 @@ impl Handler for ServerHandler {
         let mut child = match Command::new("sh")
             .arg("-c")
             .arg(command_str)
+            .process_group(0)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -264,13 +267,11 @@ impl Handler for ServerHandler {
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        tracing::warn!("[debug_client > debugger . stdin_process] n={}", data.len());
         if let Some(ref pty) = self.pty {
             write_channel_to_pty(pty, data)
                 .await
                 .map_err(russh::Error::from)?;
         }
-        tracing::warn!("[debug_client . debugger > stdin_process] n={}", data.len());
         Ok(())
     }
 }
