@@ -37,6 +37,7 @@ pub struct DebuggerError(String);
 pub struct Debugger {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
+    channel_rx: ChannelReceiver,
     debug_session_id: DebugSessionId,
     sandbox: Option<Arc<dyn Sandbox>>,
     diff_file: Option<NamedTempFile>,
@@ -62,13 +63,14 @@ impl Debugger {
             Debugger {
                 runner_state,
                 channel_tx,
+                channel_rx,
                 debug_session_id,
                 sandbox: None,
                 diff_file: None,
                 diff_hasher: None,
                 _permit: permit,
             }
-            .main(killed, channel_closed, channel_rx)
+            .main(killed, channel_closed)
             .await
         })
     }
@@ -85,7 +87,6 @@ impl Debugger {
         self,
         killed: CancellationToken,
         channel_closed: CancellationToken,
-        channel_rx: ChannelReceiver,
     ) -> Result<(), TError> {
         tokio::select! {
             _ = killed.cancelled() => {
@@ -96,17 +97,27 @@ impl Debugger {
                 tracing::info!("Channel closed, stopping Debugger.");
                 Ok(())
             }
-            result = self.run(channel_rx) => {
+            result = self.run() => {
                 result
             }
         }
     }
 
     #[tracing::instrument(skip_all)]
-    async fn run(mut self, mut channel_rx: ChannelReceiver) -> Result<(), TError> {
-        self.connect_debugger(&mut channel_rx).await?;
+    async fn run(mut self) -> Result<(), TError> {
+        self.start_debug_session().await?;
+
+        // Initialization. Disconnection indicates debug_session stopped.
+
+        self.handle_create_sandbox_request().await?;
+        self.handle_checkout_branch_request().await?;
+        self.handle_diff_upload().await?;
+        self.handle_apply_diff_request().await?;
+
+        // Ready loop. Disconnection does not indicate debug_session stopped.
+
         loop {
-            match channel_rx.recv().await {
+            match self.channel_rx.recv().await {
                 Some(message) => {
                     self.handle_message(message).await?;
                 }
@@ -119,20 +130,22 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn connect_debugger(&self, channel_rx: &mut ChannelReceiver) -> Result<(), TError> {
+    async fn start_debug_session(&mut self) -> Result<(), TError> {
         self.channel_tx
-            .send(Message::Debugger(DebuggerMessage::ConnectDebuggerRequest {
-                runner_id: self.runner_state.runner_mux_handle().runner_id(),
-                debug_session_id: self.debug_session_id,
-            }))
+            .send(Message::Debugger(
+                DebuggerMessage::StartDebugSessionRequest {
+                    runner_id: self.runner_state.runner_mux_handle().runner_id(),
+                    debug_session_id: self.debug_session_id,
+                },
+            ))
             .await?;
 
-        channel_rx
+        self.channel_rx
             .recv()
             .await
             .ok_or_else(|| TError::new("Channel closed"))
             .and_then(|response| match response {
-                Message::Debugger(DebuggerMessage::ConnectDebuggerResponse { result }) => {
+                Message::Debugger(DebuggerMessage::StartDebugSessionResponse { result }) => {
                     result.map_err(|e| TError::new(&e.to_string()))
                 }
                 _ => Err(TError::new("Unexpected message type")),
@@ -147,32 +160,27 @@ impl Debugger {
         };
 
         match message {
-            DebugClientMessage::CreateSandboxRequest { image } => {
-                self.handle_create_sandbox_request(image).await
-            }
-            DebugClientMessage::CheckoutBranchRequest { url, branch } => {
-                self.handle_checkout_branch_request(url, branch).await
-            }
-            DebugClientMessage::StartDiffUploadRequest => {
-                self.handle_start_diff_upload_request().await
-            }
-            DebugClientMessage::UploadDiffChunkRequest { chunk } => {
-                self.handle_upload_diff_chunk_request(chunk).await
-            }
-            DebugClientMessage::CompleteDiffUploadRequest { checksum } => {
-                self.handle_complete_diff_upload_request(checksum).await
-            }
             DebugClientMessage::ApplyDiffRequest => self.handle_apply_diff_request().await,
-            DebugClientMessage::StartShellRequest { step } => {
-                self.handle_start_shell_request(step).await
-            }
+            DebugClientMessage::StartShellRequest => self.handle_start_shell_request().await,
             _ => Err(DebuggerError(format!("unexpected message: {:?}", message)))?,
         }
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_create_sandbox_request(&mut self, image: ImageConfig) -> Result<(), TError> {
-        let result = self.create_sandbox(image).await.map_err(|e| e.to_string());
+    async fn handle_create_sandbox_request(&mut self) -> Result<(), TError> {
+        let result = match self.channel_rx.recv().await {
+            Some(Message::DebugClient(DebugClientMessage::CreateSandboxRequest { image })) => {
+                self.create_sandbox(image).await.map_err(|e| e.to_string())
+            }
+            Some(message) => {
+                let e = DebuggerError(format!("unexpected message: {:?}", message));
+                return Err(e.into());
+            }
+            None => {
+                tracing::info!("Channel closed, stopping Debugger.");
+                return Ok(());
+            }
+        };
 
         self.channel_tx
             .send(Message::DebugClient(
@@ -203,15 +211,24 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_checkout_branch_request(
-        &self,
-        url: Url,
-        branch: GitBranch,
-    ) -> Result<(), TError> {
-        let result = self
-            .checkout_branch(url, branch)
-            .await
-            .map_err(|e| e.to_string());
+    async fn handle_checkout_branch_request(&mut self) -> Result<(), TError> {
+        let result = match self.channel_rx.recv().await {
+            Some(Message::DebugClient(DebugClientMessage::CheckoutBranchRequest {
+                url,
+                branch,
+            })) => self
+                .checkout_branch(url, branch)
+                .await
+                .map_err(|e| e.to_string()),
+            Some(message) => {
+                let e = DebuggerError(format!("unexpected message: {:?}", message));
+                return Err(e.into());
+            }
+            None => {
+                tracing::info!("Channel closed, stopping Debugger.");
+                return Ok(());
+            }
+        };
 
         self.channel_tx
             .send(Message::DebugClient(
@@ -244,8 +261,20 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_start_diff_upload_request(&mut self) -> Result<(), TError> {
-        let result = self.start_diff_upload().await.map_err(|e| e.to_string());
+    async fn handle_diff_upload(&mut self) -> Result<(), TError> {
+        let result = match self.channel_rx.recv().await {
+            Some(Message::DebugClient(DebugClientMessage::StartDiffUploadRequest)) => {
+                self.start_diff_upload().await.map_err(|e| e.to_string())
+            }
+            Some(message) => {
+                let e = DebuggerError(format!("unexpected message: {:?}", message));
+                return Err(e.into());
+            }
+            None => {
+                tracing::info!("Channel closed, stopping Debugger.");
+                return Ok(());
+            }
+        };
 
         self.channel_tx
             .send(Message::DebugClient(
@@ -253,28 +282,54 @@ impl Debugger {
             ))
             .await?;
 
-        Ok(())
+        loop {
+            match self.channel_rx.recv().await {
+                Some(Message::DebugClient(DebugClientMessage::UploadDiffChunkRequest {
+                    chunk,
+                })) => {
+                    let result = self
+                        .upload_diff_chunk(chunk)
+                        .await
+                        .map_err(|e| e.to_string());
+
+                    self.channel_tx
+                        .send(Message::DebugClient(
+                            DebugClientMessage::UploadDiffChunkResponse { result },
+                        ))
+                        .await?;
+                }
+                Some(Message::DebugClient(DebugClientMessage::CompleteDiffUploadRequest {
+                    checksum,
+                })) => {
+                    let result = self
+                        .complete_diff_upload(checksum)
+                        .await
+                        .map_err(|e| e.to_string());
+
+                    self.channel_tx
+                        .send(Message::DebugClient(
+                            DebugClientMessage::CompleteDiffUploadResponse { result },
+                        ))
+                        .await?;
+
+                    return Ok(());
+                }
+                Some(message) => {
+                    let e = DebuggerError(format!("unexpected message: {:?}", message));
+                    return Err(e.into());
+                }
+                None => {
+                    tracing::info!("Channel closed, stopping Debugger.");
+                    return Ok(());
+                }
+            }
+        }
     }
 
     #[tracing::instrument(skip_all)]
     async fn start_diff_upload(&mut self) -> Result<(), TError> {
         self.diff_file = Some(NamedTempFile::new()?);
         self.diff_hasher = Some(Sha256::new());
-        Ok(())
-    }
-
-    #[tracing::instrument(skip_all)]
-    async fn handle_upload_diff_chunk_request(&mut self, chunk: Vec<u8>) -> Result<(), TError> {
-        let result = self
-            .upload_diff_chunk(chunk)
-            .await
-            .map_err(|e| e.to_string());
-        self.channel_tx
-            .send(Message::DebugClient(
-                DebugClientMessage::UploadDiffChunkResponse { result },
-            ))
-            .await?;
-
         Ok(())
     }
 
@@ -302,24 +357,6 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_complete_diff_upload_request(
-        &mut self,
-        checksum: String,
-    ) -> Result<(), TError> {
-        let result = self
-            .complete_diff_upload(checksum)
-            .await
-            .map_err(|e| e.to_string());
-        self.channel_tx
-            .send(Message::DebugClient(
-                DebugClientMessage::CompleteDiffUploadResponse { result },
-            ))
-            .await?;
-
-        Ok(())
-    }
-
-    #[tracing::instrument(skip_all)]
     async fn complete_diff_upload(&mut self, checksum: String) -> Result<(), TError> {
         let diff_hasher = self
             .diff_hasher
@@ -335,8 +372,21 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_apply_diff_request(&self) -> Result<(), TError> {
-        let result = self.apply_diff().await.map_err(|e| e.to_string());
+    async fn handle_apply_diff_request(&mut self) -> Result<(), TError> {
+        let result = match self.channel_rx.recv().await {
+            Some(Message::DebugClient(DebugClientMessage::ApplyDiffRequest)) => {
+                self.apply_diff().await.map_err(|e| e.to_string())
+            }
+            Some(message) => {
+                let e = DebuggerError(format!("unexpected message: {:?}", message));
+                return Err(e.into());
+            }
+            None => {
+                tracing::info!("Channel closed, stopping Debugger.");
+                return Ok(());
+            }
+        };
+
         self.channel_tx
             .send(Message::DebugClient(
                 DebugClientMessage::ApplyDiffResponse { result },
@@ -347,7 +397,7 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn apply_diff(&self) -> Result<(), TError> {
+    async fn apply_diff(&mut self) -> Result<(), TError> {
         let sandbox = self
             .sandbox
             .as_ref()
@@ -367,8 +417,9 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn handle_start_shell_request(&self, step: StepConfig) -> Result<(), TError> {
-        let result = self.start_shell(step).await.map_err(|e| e.to_string());
+    async fn handle_start_shell_request(&self) -> Result<(), TError> {
+        let result = self.start_shell().await.map_err(|e| e.to_string());
+
         self.channel_tx
             .send(Message::DebugClient(
                 DebugClientMessage::StartShellResponse { result },
@@ -379,9 +430,7 @@ impl Debugger {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn start_shell(&self, _step: StepConfig) -> Result<(), TError> {
-        // TODO: Setup step image.
-
+    async fn start_shell(&self) -> Result<(), TError> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
         DebuggerTunnel::spawn(self.runner_state.clone(), self.debug_session_id, reply_tx);

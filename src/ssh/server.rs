@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use nix::errno::Errno;
 use std::collections::HashMap;
 use std::io;
 use std::os::fd::AsFd;
@@ -110,7 +111,6 @@ impl Handler for ServerHandler {
             .lock()
             .expect("SSH server handler processes lock is poisoned");
         if let Some(&pid) = processes.get(&channel) {
-            eprintln!("Received signal {signal_name:?} for pid {pid}");
             let sig_num = match signal_name {
                 russh::Sig::INT => libc::SIGINT,
                 russh::Sig::TERM => libc::SIGTERM,
@@ -118,10 +118,12 @@ impl Handler for ServerHandler {
                 russh::Sig::QUIT => libc::SIGQUIT,
                 _ => libc::SIGINT,
             };
-            eprintln!("pid as i32: {}", pid as i32);
-            unsafe {
-                let result = libc::killpg(pid as i32, sig_num);
-                eprintln!("result: {}", result);
+            let result = unsafe { libc::killpg(pid as i32, sig_num) };
+            if result < 0 {
+                tracing::error!(
+                    "Failed to forward signal with libc::killpg. {}",
+                    Errno::last()
+                )
             }
         }
         Ok(())

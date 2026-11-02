@@ -73,7 +73,7 @@ impl DebuggerTunnel {
 
             result = self.run(channel_rx, reply_tx) => {
                 match result {
-                    Ok(_) => {
+                    Ok(()) => {
                         tracing::info!("DebuggerTunnel finished running.");
                     }
                     Err(e) => {
@@ -92,13 +92,10 @@ impl DebuggerTunnel {
         reply_tx: oneshot::Sender<()>,
     ) -> Result<(), TError> {
         self.create_debug_tunnel(&mut channel_rx).await?;
-        tracing::info!("Created debug tunnel");
 
         self.start_ssh_server(channel_rx).await?;
-        tracing::info!("Started SSH server");
 
         let _ = reply_tx.send(());
-        tracing::info!("Sent reply");
 
         Ok(())
     }
@@ -147,7 +144,6 @@ impl DebuggerTunnel {
         let server_handler = ServerHandler::new("jid".to_string());
 
         tokio::spawn(russh::server::run_stream(config, stream, server_handler));
-        tracing::info!("SSH server started");
 
         Ok(())
     }
